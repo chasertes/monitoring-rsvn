@@ -289,13 +289,6 @@ def upgrade() -> None:
     )
 
     op.create_index(
-        op.f("ix_snmp_measurements_camera_id"),
-        "snmp_measurements",
-        ["camera_id"],
-        unique=False,
-    )
-
-    op.create_index(
         op.f("ix_snmp_measurements_measured_at"),
         "snmp_measurements",
         ["measured_at"],
@@ -475,13 +468,6 @@ def upgrade() -> None:
             "id",
             name=op.f("pk_wink_measurements"),
         ),
-    )
-
-    op.create_index(
-        op.f("ix_wink_measurements_camera_id"),
-        "wink_measurements",
-        ["camera_id"],
-        unique=False,
     )
 
     op.create_index(
@@ -712,10 +698,6 @@ def downgrade() -> None:
         op.f("ix_wink_measurements_measured_at"),
         table_name="wink_measurements",
     )
-    op.drop_index(
-        op.f("ix_wink_measurements_camera_id"),
-        table_name="wink_measurements",
-    )
     op.drop_table("wink_measurements")
 
     op.drop_index(
@@ -738,10 +720,6 @@ def downgrade() -> None:
     )
     op.drop_index(
         op.f("ix_snmp_measurements_measured_at"),
-        table_name="snmp_measurements",
-    )
-    op.drop_index(
-        op.f("ix_snmp_measurements_camera_id"),
         table_name="snmp_measurements",
     )
     op.drop_table("snmp_measurements")
