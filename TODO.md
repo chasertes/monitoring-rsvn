@@ -1,52 +1,69 @@
 # Monitoring RSVN — TODO.md
 
-> Дорожная карта полной переработки проекта.
+> Дорожная карта разработки и архитектурной переработки проекта `monitoring-rsvn`.
 >
-> Статусы:
->
-> * `[ ]` — не выполнено
-> * `[~]` — выполняется
-> * `[x]` — выполнено
-> * `[!]` — блокирующий вопрос / требуется решение
-> * `[?]` — требуется дополнительное исследование
->
-> Ответственные:
->
-> * `AI` — выполняет ИИ-агент
-> * `DEV` — действие/решение разработчика
-> * `AI+DEV` — совместная работа
->
-> **Критическое правило:** пароли камер и RTSP credentials НЕ удаляются из проекта. Они должны продолжить храниться в системе и использоваться мониторингом.
+> Документ является рабочей точкой продолжения разработки.
+> После каждого значимого этапа статус задач должен обновляться здесь.
+
+## Статусы
+
+* `[ ]` — не выполнено
+* `[~]` — выполняется
+* `[x]` — выполнено
+* `[!]` — блокирующий вопрос / требуется решение
+* `[?]` — требуется дополнительное исследование
+
+## Ответственные
+
+* `AI` — выполняет ИИ-агент
+* `DEV` — действие или решение разработчика
+* `AI+DEV` — совместная работа
 
 ---
 
-# 0. Цели проекта
+# 0. Главная цель проекта
 
-* [ ] `AI+DEV` Перевести результаты мониторинга с JSON-файлов на полноценную СУБД.
-* [ ] `AI+DEV` Выбрать PostgreSQL как основную СУБД.
-* [ ] `AI` Переделать архитектуру проекта в модульную структуру.
-* [ ] `AI` Объединить SNMP и WINK в единый backend.
-* [ ] `AI` Создать единый Web UI.
-* [ ] `AI` Создать интерфейс управления камерами.
-* [ ] `AI` Создать историю результатов мониторинга.
-* [ ] `AI` Перевести SNMP на чистый asyncio.
-* [ ] `AI` Устранить архитектурную проблему `ThreadPoolExecutor + asyncio` в SNMP.
-* [ ] `AI` Сохранить ограничение параллельных WINK-проверок, но вынести его в конфигурацию.
-* [ ] `AI` Добавить нормальное управление зависимостями Python.
-* [ ] `AI` Добавить конфигурацию вместо hardcoded settings.
-* [ ] `AI` Добавить logging.
-* [ ] `AI` Добавить миграции БД.
-* [ ] `AI` Добавить тесты.
-* [ ] `AI` Подготовить запуск через systemd.
-* [ ] `AI+DEV` Провести финальный аудит после миграции.
+Перевести текущий скриптовый мониторинг SNMP/WINK на полноценное модульное приложение:
+
+```text
+                    Browser
+                       |
+                       v
+                 FastAPI / Web UI
+                       |
+                       v
+                   Services
+                  /        \
+                 /          \
+                v            v
+             SNMP           WINK
+            Scanner        Scanner
+                \            /
+                 \          /
+                    PostgreSQL
+```
+
+Целевое приложение должно:
+
+* хранить конфигурацию камер в PostgreSQL;
+* хранить credentials камер;
+* выполнять SNMP-мониторинг;
+* выполнять WINK/RTSP-мониторинг;
+* хранить историю измерений;
+* предоставлять API;
+* предоставлять Web UI;
+* позволять управлять камерами;
+* предоставлять историю и диагностику;
+* запускаться как отдельные `web` и `worker` процессы;
+* не зависеть от JSON-файлов как от основного хранилища.
 
 ---
 
-# 1. Зафиксированное состояние текущего проекта
+# 1. Текущее состояние проекта
 
-## 1.1 Текущая структура
+## 1.1 Исходный проект
 
-Текущий проект состоит из четырёх основных скриптов:
+Изначально проект состоял из четырёх основных скриптов:
 
 ```text
 scan-snmp.py
@@ -55,1492 +72,1529 @@ generate-snmp-report.py
 generate-wink-report.py
 ```
 
-Текущий поток:
+Старая архитектура:
 
 ```text
 cameras.xlsx
-    │
-    ├── scan-snmp.py
-    │       │
-    │       └── scanned_metrics/*.json
-    │                │
-    │                └── generate-snmp-report.py
-    │                         │
-    │                         └── report-snmp.html
-    │
-    └── scan-wink.py
-            │
-            └── metrics_json/*.json
-                     │
-                     └── generate-wink-report.py
-                              │
-                              └── report-wink.html
+      |
+      +--------------------+
+      |                    |
+      v                    v
+scan-snmp.py          scan-wink.py
+      |                    |
+      v                    v
+SNMP JSON              WINK JSON
+      |                    |
+      v                    v
+generate-*            generate-*
+      |                    |
+      v                    v
+HTML reports
 ```
 
 ---
 
-# 2. Инвентаризация текущего SNMP
+# 2. Что уже сделано
 
-## 2.1 SNMP settings
+## 2.1 Архитектурное проектирование
 
-Текущий код содержит:
+* [x] `AI` Проведён аудит исходной архитектуры.
+* [x] `AI` Определено разделение Web/API, services, scanners и database.
+* [x] `AI` Определено разделение Web process и Monitoring Worker.
+* [x] `AI` Определена PostgreSQL как основная СУБД.
+* [x] `AI` Определено, что PostgreSQL является source of truth.
+* [x] `AI` Определено, что JSON больше не является основной БД.
+* [x] `AI` Определена целевая модульная структура проекта.
 
-```text
-COMMUNITY = "public"
-SNMP_PORT = 161
-TIMEOUT = 2.0
-RETRIES = 1
-MAX_THREADS = 50
-```
-
-Также hardcoded:
+Документ:
 
 ```text
-ExceptOurNetworks = 0
-
-OurIp:
-    10.35.2.0/24
-    10.0.70.10
+docs/ARCHITECTURE.md
 ```
-
-Задача:
-
-* [ ] `AI` Перенести настройки в конфигурацию.
-* [ ] `AI` Убрать `MAX_THREADS`.
-* [ ] `AI` Заменить его на ограничение asyncio concurrency.
-* [ ] `AI` Перенести `OurIp` в конфигурацию.
-* [ ] `AI` Перенести `ExceptOurNetworks` в конфигурацию.
-* [ ] `AI` Перенести SNMP timeout/retries в конфигурацию.
-* [ ] `AI+DEV` Определить, хранится ли SNMP community глобально или индивидуально для камеры.
 
 ---
 
-# 3. Данные SNMP
+## 2.2 Проектирование PostgreSQL schema
 
-Текущий SNMP собирает:
+* [x] `AI` Определена предварительная схема PostgreSQL.
+* [x] `AI` Определена таблица `cameras`.
+* [x] `AI` Определена таблица `camera_credentials`.
+* [x] `AI` Определена таблица `snmp_measurements`.
+* [x] `AI` Определена таблица `rtsp_clients`.
+* [x] `AI` Определена таблица `wink_measurements`.
+* [x] `AI` Определена таблица `wink_streams`.
+* [x] `AI` Определены основные foreign keys.
+* [x] `AI` Определены основные индексы.
+* [x] `AI` Определена стратегия хранения истории.
+* [x] `AI` Определена стратегия хранения timestamps.
+* [x] `AI` Определено соответствие старых SNMP JSON новым таблицам.
+* [x] `AI` Определено соответствие старых WINK JSON новым таблицам.
+* [x] `AI` Зафиксированы данные WINK, которые нельзя потерять.
+
+Документ:
 
 ```text
-sys_descr
-sys_uptime
-sys_name
-
-ip_in_receives
-ip_in_hdr_errors
-ip_in_addr_errors
-ip_out_requests
-
-icmp_in_msgs
-icmp_out_echo_reps
-
-mac_address_v6
-mac_address_v4
-interface_speed
-
-active_rtsp_sessions_count
-connected_clients[]
+docs/DATABASE_SCHEMA.md
 ```
 
-Для каждого клиента:
+---
+
+## 2.3 Python dependencies
+
+* [x] `AI` Создан `pyproject.toml`.
+* [x] `AI` Добавлен FastAPI.
+* [x] `AI` Добавлен Uvicorn.
+* [x] `AI` Добавлен Pydantic.
+* [x] `AI` Добавлен pydantic-settings.
+* [x] `AI` Добавлен SQLAlchemy 2.x.
+* [x] `AI` Добавлен asyncpg.
+* [x] `AI` Добавлен Alembic.
+* [x] `AI` Добавлен PySNMP 7.x.
+* [x] `AI` Добавлен openpyxl.
+* [x] `AI` Добавлен Jinja2.
+* [x] `AI` Добавлены pytest и pytest-asyncio.
+* [x] `AI` Добавлен httpx для API-тестов.
+* [x] `AI` Добавлен Ruff.
+* [x] `AI` Настроен pytest.
+* [x] `AI` Настроен Ruff.
+* [x] `AI` Настроены entry points:
 
 ```text
-client_ip
-client_port
+monitoring-rsvn-web
+monitoring-rsvn-worker
 ```
 
-Также сохраняются:
+---
+
+## 2.4 Application configuration
+
+Создан:
 
 ```text
-tz_number
-order_number
-rtsp_url
-operator
-ip
-scan_timestamp
+app/config.py
+```
+
+Выполнено:
+
+* [x] `AI` Создан централизованный объект `Settings`.
+* [x] `AI` Используется `pydantic-settings`.
+* [x] `AI` Поддерживается `.env`.
+* [x] `AI` Конфигурация приложения вынесена из бизнес-кода.
+* [x] `AI` Настроены host/port.
+* [x] `AI` Настроен log level.
+* [x] `AI` Настроен `database_url`.
+* [x] `AI` Настроены database pool settings.
+* [x] `AI` Настроены runtime directories.
+* [x] `AI` Настроен путь к `cameras.xlsx`.
+* [x] `AI` Настроены SNMP timeout/retries.
+* [x] `AI` Настроен SNMP concurrency.
+* [x] `AI` Настроен путь к `wink-rtsp-stats.exe`.
+* [x] `AI` Настроен WINK concurrency.
+* [x] `AI` Настроен WINK timeout.
+* [x] `AI` Настроен monitoring interval.
+* [x] `AI` Настроены monitoring retries.
+* [x] `AI` Вынесены сетевые фильтры.
+* [x] `AI` Добавлен флаг `log_sensitive_urls`.
+* [x] `AI` Реализован cached `get_settings()`.
+
+---
+
+# 3. Database infrastructure
+
+Создан:
+
+```text
+app/database.py
+```
+
+Выполнено:
+
+* [x] `AI` Создан SQLAlchemy `DeclarativeBase`.
+* [x] `AI` Создана naming convention для PostgreSQL/Alembic.
+* [x] `AI` Создан async SQLAlchemy engine.
+* [x] `AI` Используется asyncpg.
+* [x] `AI` Создан `AsyncSessionFactory`.
+* [x] `AI` Создан `get_db_session()`.
+* [x] `AI` Создана проверка соединения с PostgreSQL.
+* [x] `AI` Добавлено корректное закрытие database engine.
+* [x] `AI` Добавлен безопасный `get_engine_info()`.
+* [x] `AI` Database credentials не выводятся через `get_engine_info()`.
+
+Важно:
+
+```text
+app/database.py
+```
+
+пока является только инфраструктурой БД.
+
+ORM-модели и миграции ещё не созданы.
+
+---
+
+# 4. Критически важный следующий этап — ORM models
+
+## 4.1 Создание структуры моделей
+
+Создать:
+
+```text
+app/models/
+├── __init__.py
+├── camera.py
+├── credentials.py
+├── snmp.py
+├── rtsp_client.py
+└── wink.py
 ```
 
 Задачи:
 
-* [ ] `AI` Составить окончательную модель SNMP measurement.
-* [ ] `AI` Определить тип каждого значения PostgreSQL.
-* [ ] `AI` Не хранить числовые значения как строки без необходимости.
-* [ ] `AI` Сохранять timestamp средствами БД.
-* [ ] `AI` Отделить metadata камеры от результатов измерения.
-* [ ] `AI` Сохранить информацию об активных RTSP-клиентах.
-* [ ] `AI` Определить модель хранения списка `connected_clients`.
-* [ ] `AI` Решить, нужны ли отдельные записи для каждого RTSP-клиента.
+* [ ] `AI` Создать `app/models/__init__.py`.
+* [ ] `AI` Создать `Camera`.
+* [ ] `AI` Создать `CameraCredential`.
+* [ ] `AI` Создать `SnmpMeasurement`.
+* [ ] `AI` Создать `RtspClient`.
+* [ ] `AI` Создать `WinkMeasurement`.
+* [ ] `AI` Создать `WinkStream`.
+* [ ] `AI` Подключить все модели к `Base`.
+* [ ] `AI` Проверить все foreign keys.
+* [ ] `AI` Проверить cascade behavior.
+* [ ] `AI` Проверить indexes.
+* [ ] `AI` Проверить unique constraints.
+* [ ] `AI` Проверить nullable/non-nullable поля.
+* [ ] `AI` Проверить timezone-aware datetime.
+* [ ] `AI` Не использовать `Base.metadata.create_all()` как механизм production migrations.
 
 ---
 
-# 4. Полный переход SNMP на asyncio
+# 5. Alembic
 
-## Текущее состояние
+## 5.1 Создание миграционной инфраструктуры
 
-Сейчас используется:
+* [ ] `AI` Создать `alembic.ini` или эквивалентную конфигурацию.
+* [ ] `AI` Создать `migrations/`.
+* [ ] `AI` Создать `migrations/env.py`.
+* [ ] `AI` Настроить async SQLAlchemy/Alembic.
+* [ ] `AI` Подключить metadata всех моделей.
+* [ ] `AI` Не хранить database password в migration files.
+* [ ] `AI` Получать database URL через application settings.
+
+## 5.2 Initial migration
+
+* [ ] `AI` Создать initial migration.
+* [ ] `AI` Создать `cameras`.
+* [ ] `AI` Создать `camera_credentials`.
+* [ ] `AI` Создать `snmp_measurements`.
+* [ ] `AI` Создать `rtsp_clients`.
+* [ ] `AI` Создать `wink_measurements`.
+* [ ] `AI` Создать `wink_streams`.
+* [ ] `AI` Создать все foreign keys.
+* [ ] `AI` Создать все обязательные indexes.
+* [ ] `AI` Проверить upgrade.
+* [ ] `AI` Проверить downgrade.
+* [ ] `AI` Проверить повторный запуск migration chain.
+
+---
+
+# 6. Application package
+
+Сейчас `pyproject.toml` уже ожидает:
 
 ```text
-ThreadPoolExecutor(max_workers=50)
-        │
-        ├── thread
-        │      └── asyncio.run(...)
-        │
-        ├── thread
-        │      └── asyncio.run(...)
-        │
-        └── ...
+app.main:main
+app.worker:main
 ```
 
-Это необходимо переделать.
+Но этих модулей пока нет.
 
-## Целевая архитектура
+Задачи:
+
+* [ ] `AI` Создать `app/__init__.py`.
+* [ ] `AI` Создать `app/main.py`.
+* [ ] `AI` Создать `app/worker.py`.
+* [ ] `AI` Проверить запуск:
+
+```bash
+python -m app.main
+```
+
+* [ ] `AI` Проверить:
+
+```bash
+monitoring-rsvn-web
+```
+
+* [ ] `AI` Проверить:
+
+```bash
+monitoring-rsvn-worker
+```
+
+---
+
+# 7. Logging
+
+Создать:
+
+```text
+app/logging_config.py
+```
+
+Задачи:
+
+* [ ] `AI` Создать централизованную logging configuration.
+* [ ] `AI` Настроить console logging.
+* [ ] `AI` Настроить file logging при необходимости.
+* [ ] `AI` Настроить log level через settings.
+* [ ] `AI` Добавить timestamps.
+* [ ] `AI` Добавить module/logger names.
+* [ ] `AI` Не писать passwords в лог.
+* [ ] `AI` Не писать полный RTSP URL с credentials.
+* [ ] `AI` Не логировать database password.
+* [ ] `AI` Логировать ошибки SNMP.
+* [ ] `AI` Логировать ошибки WINK.
+* [ ] `AI` Логировать начало и окончание monitoring cycle.
+
+---
+
+# 8. SNMP migration
+
+## 8.1 Целевая архитектура
+
+Старое:
+
+```text
+ThreadPoolExecutor
+        |
+        +--> asyncio.run()
+        |
+        +--> asyncio.run()
+        |
+        +--> asyncio.run()
+```
+
+Новое:
 
 ```text
 asyncio event loop
-        │
-        ├── camera #1
-        ├── camera #2
-        ├── camera #3
-        ├── ...
-        └── camera #N
-
-asyncio.Semaphore(N)
+        |
+        +--> camera #1
+        +--> camera #2
+        +--> camera #3
+        +--> ...
+        |
+asyncio.Semaphore(snmp_concurrency)
 ```
 
 Задачи:
 
-* [ ] `AI` Удалить `ThreadPoolExecutor` из SNMP.
-* [ ] `AI` Удалить `process_camera_in_thread()`.
-* [ ] `AI` Создать единый async worker.
-* [ ] `AI` Создать `asyncio.Semaphore`.
-* [ ] `AI` Ограничивать одновременно выполняющиеся SNMP операции через semaphore.
-* [ ] `AI` Корректно создавать/закрывать `SnmpEngine`.
-* [ ] `AI` Обеспечить корректную обработку timeout.
-* [ ] `AI` Обеспечить корректную обработку SNMP error status.
-* [ ] `AI` Не использовать `except Exception: pass`.
-* [ ] `AI` Добавить диагностическое логирование.
-* [ ] `AI` Проверить совместимость с текущей PySNMP 7.x API.
-* [ ] `AI` Проверить корректность SNMP TCP table walk после переписывания.
-* [ ] `AI` Провести нагрузочный тест на большом количестве камер.
+* [ ] `AI` Создать `app/scanners/`.
+* [ ] `AI` Создать `app/scanners/snmp_scanner.py`.
+* [ ] `AI` Перенести SNMP protocol logic.
+* [ ] `AI` Удалить `ThreadPoolExecutor` из новой реализации.
+* [ ] `AI` Не использовать `asyncio.run()` для каждой камеры.
+* [ ] `AI` Использовать единый event loop.
+* [ ] `AI` Использовать `asyncio.Semaphore`.
+* [ ] `AI` Перенести SNMP timeout.
+* [ ] `AI` Перенести retries.
+* [ ] `AI` Проверить PySNMP 7.x API.
+* [ ] `AI` Проверить SNMP GET.
+* [ ] `AI` Проверить SNMP WALK.
+* [ ] `AI` Проверить TCP table walk.
+* [ ] `AI` Обработать timeout.
+* [ ] `AI` Обработать SNMP error status.
+* [ ] `AI` Обработать недоступную камеру.
+* [ ] `AI` Убрать беззвучный `except Exception: pass`.
+* [ ] `AI` Вернуть scanner structured result.
+* [ ] `AI` Не позволять scanner напрямую записывать данные в БД.
 
 ---
 
-# 5. WINK / RTSP
+# 9. SNMP service
 
-## Текущее состояние
-
-WINK использует:
+Создать:
 
 ```text
-ThreadPoolExecutor(max_workers=4)
-        │
-        └── subprocess.run()
-                │
-                └── wink-rtsp-stats.exe
-```
-
-В отличие от SNMP это не нужно бездумно переводить в asyncio.
-
-Причина:
-
-`wink-rtsp-stats.exe` — внешний блокирующий процесс.
-
-Целевой вариант:
-
-```text
-async application
-       │
-       └── bounded process execution
-              │
-              └── wink-rtsp-stats.exe
+app/services/snmp_service.py
 ```
 
 Задачи:
 
-* [ ] `AI` Оставить ограничение количества одновременных WINK-проверок.
-* [ ] `AI` Переименовать `MAX_WORKERS` в более точный параметр concurrency.
-* [ ] `AI` Вынести значение в конфигурацию.
-* [ ] `AI` Вынести путь к `wink-rtsp-stats.exe` в конфигурацию.
-* [ ] `AI` Обработать отсутствие executable.
+* [ ] `AI` Получать camera configuration.
+* [ ] `AI` Получать SNMP credentials.
+* [ ] `AI` Вызывать `snmp_scanner`.
+* [ ] `AI` Преобразовывать scanner result в domain measurement.
+* [ ] `AI` Рассчитывать SNMP status.
+* [ ] `AI` Сохранять `snmp_measurements`.
+* [ ] `AI` Сохранять `rtsp_clients`.
+* [ ] `AI` Сохранять timestamp.
+* [ ] `AI` Сохранять ошибки измерения.
+* [ ] `AI` Не смешивать scanner и database logic.
+
+---
+
+# 10. SNMP status
+
+Существующие бизнес-правила должны быть сохранены.
+
+Проверки:
+
+```text
+uptime < 1 дня
+    → нарушение
+
+interface_speed < 100 Mbps
+    → нарушение
+```
+
+Задачи:
+
+* [ ] `AI` Формализовать SNMP status.
+* [ ] `AI` Определить enum/constants.
+* [ ] `AI` Зафиксировать порядок проверок.
+* [ ] `AI` Написать unit tests.
+* [ ] `AI` Не изменять исходные измеренные значения при расчёте статуса.
+
+---
+
+# 11. WINK / RTSP migration
+
+## 11.1 Scanner
+
+Создать:
+
+```text
+app/scanners/wink_scanner.py
+```
+
+Задачи:
+
+* [ ] `AI` Перенести запуск `wink-rtsp-stats.exe`.
+* [ ] `AI` Перенести subprocess logic.
+* [ ] `AI` Использовать настроенный executable path.
+* [ ] `AI` Использовать ограничение `wink_concurrency`.
+* [ ] `AI` Реализовать timeout.
+* [ ] `AI` Обработать отсутствующий executable.
 * [ ] `AI` Обработать ненулевой exit code.
-* [ ] `AI` Обработать timeout внешнего процесса.
-* [ ] `AI` Не блокировать основной worker бесконтрольно.
-* [ ] `AI` Сохранять результат WINK непосредственно в PostgreSQL.
-* [ ] `AI` Сохранить raw output при необходимости диагностики.
-* [ ] `AI` Проверить, нужно ли хранить raw output постоянно или только при ошибке.
+* [ ] `AI` Обработать invalid JSON.
+* [ ] `AI` Обработать пустой результат.
+* [ ] `AI` Вернуть structured Python result.
+* [ ] `AI` Не записывать данные непосредственно в БД.
 
 ---
 
-# 6. WINK данные
+# 12. WINK service
 
-Текущая логика использует:
+Создать:
 
 ```text
-camera_id
-order_no
-password
-operator
-target
+app/services/wink_service.py
 ```
 
-Из WINK metrics:
+Задачи:
+
+* [ ] `AI` Получать credentials камеры.
+* [ ] `AI` Формировать runtime WINK request.
+* [ ] `AI` Вызывать WINK scanner.
+* [ ] `AI` Разбирать WINK result.
+* [ ] `AI` Сохранять `wink_measurements`.
+* [ ] `AI` Сохранять `wink_streams`.
+* [ ] `AI` Рассчитывать packet loss.
+* [ ] `AI` Рассчитывать bitrate.
+* [ ] `AI` Рассчитывать jitter.
+* [ ] `AI` Рассчитывать итоговый status.
+* [ ] `AI` Сохранять ошибки.
+* [ ] `AI` При необходимости сохранять raw result.
+
+---
+
+# 13. WINK status
+
+Сохранить текущие правила:
 
 ```text
-total_bitrate_kbps_avg
-total_packets
-total_packets_lost_estimated
-jitter_ms_avg
-streams[]
+packet_loss > 10%
+    → BAD
+
+total bitrate < 50 kbps
+    → STALLED
+
+bitrate < 5 Mbps
+    → LOW BITRATE
+
+packet_loss > 2%
+    → WARNING
+
+иначе
+    → GOOD
 ```
 
-Рассчитываются:
+Задачи:
+
+* [ ] `AI` Формализовать порядок проверок.
+* [ ] `AI` Вынести thresholds в configuration.
+* [ ] `AI` Создать enum/constants.
+* [ ] `AI` Написать unit tests.
+* [ ] `AI` Проверить пограничные значения.
+* [ ] `AI` Проверить случай нескольких streams.
+* [ ] `AI` Проверить отсутствие streams.
+
+---
+
+# 14. Monitoring service
+
+Создать:
 
 ```text
-bitrate Mbps
-packet loss %
-jitter
+app/services/monitoring_service.py
 ```
 
-Статусы:
+Задачи:
+
+* [ ] `AI` Создать orchestration layer.
+* [ ] `AI` Реализовать мониторинг одной камеры.
+* [ ] `AI` Реализовать мониторинг всех enabled камер.
+* [ ] `AI` Запускать SNMP.
+* [ ] `AI` Запускать WINK.
+* [ ] `AI` Собирать результаты.
+* [ ] `AI` Определять общий status камеры.
+* [ ] `AI` Реализовать monitoring summary.
+* [ ] `AI` Реализовать problems list.
+* [ ] `AI` Не помещать orchestration logic в API routes.
+
+---
+
+# 15. Общий статус камеры
+
+Предварительные статусы:
 
 ```text
-BAD
-STALLED
-LOW BITRATE
+DISABLED
+OFFLINE
+ERROR
 WARNING
-GOOD
+ONLINE
+UNKNOWN
 ```
 
 Задачи:
 
-* [ ] `AI` Формализовать модель WINK measurement.
-* [ ] `AI` Перенести расчёт bitrate в backend.
-* [ ] `AI` Перенести расчёт packet loss в backend.
-* [ ] `AI` Перенести расчёт jitter в backend.
-* [ ] `AI` Формализовать status enum.
-* [ ] `AI` Вынести thresholds в конфигурацию.
-* [ ] `AI` Сохранять timestamp каждого измерения.
-* [ ] `AI` Сохранять результат каждого stream при необходимости.
-* [ ] `AI` Определить модель таблицы `wink_stream_measurements`.
+* [ ] `AI` Формализовать status priority.
+* [ ] `AI` Определить влияние SNMP на общий status.
+* [ ] `AI` Определить влияние WINK на общий status.
+* [ ] `AI` Определить поведение при отсутствии одного из measurements.
+* [ ] `AI` Реализовать единый алгоритм.
+* [ ] `AI` Написать unit tests.
 
 ---
 
-# 7. PostgreSQL
+# 16. Camera models и CRUD
 
-## Решение
-
-Основная СУБД:
+Создать:
 
 ```text
-PostgreSQL
+app/services/camera_service.py
 ```
-
-Не использовать JSON-файлы как основное хранилище результатов.
 
 Задачи:
 
-* [ ] `AI` Создать PostgreSQL schema.
-* [ ] `AI` Создать SQLAlchemy models.
-* [ ] `AI` Создать Alembic migrations.
-* [ ] `AI` Создать initial migration.
-* [ ] `AI` Добавить индексы.
-* [ ] `AI` Добавить foreign keys.
-* [ ] `AI` Добавить timestamps.
-* [ ] `AI` Добавить constraints.
-* [ ] `AI` Проверить cascade/update/delete поведение.
+* [ ] `AI` Реализовать получение списка камер.
+* [ ] `AI` Реализовать получение одной камеры.
+* [ ] `AI` Реализовать создание камеры.
+* [ ] `AI` Реализовать изменение камеры.
+* [ ] `AI` Реализовать enable/disable.
+* [ ] `AI` Реализовать административное удаление.
+* [ ] `AI` Сохранять исторические measurements при обычном disable.
+* [ ] `AI` Проверять уникальность camera number.
+* [ ] `AI` Валидировать IP address.
+* [ ] `AI` Валидировать обязательные поля.
 
 ---
 
-# 8. Предварительная модель БД
+# 17. Credentials
 
-## cameras
+Критическое правило:
 
-Предварительно:
-
-```text
-cameras
----------
-id
-camera_number
-name
-ip_address
-manufacturer
-model
-operator
-order_number
-rtsp_url
-enabled
-created_at
-updated_at
-```
+> Пароли камер и RTSP credentials не удаляются из рабочего процесса.
 
 Задачи:
 
-* [ ] `AI` Уточнить обязательные поля.
-* [ ] `AI` Определить unique constraints.
-* [ ] `AI` Определить формат IP.
-* [ ] `AI` Определить формат camera_number.
-* [ ] `AI` Добавить enabled/disabled.
-* [ ] `AI` Добавить description/notes при необходимости.
-
----
-
-# 9. Credentials
-
-Пароли сохраняем.
-
-Предварительно:
-
-```text
-camera_credentials
-------------------
-id
-camera_id
-username
-password
-snmp_community
-created_at
-updated_at
-```
-
-Задачи:
-
-* [ ] `AI+DEV` Подтвердить окончательную модель credentials.
-* [ ] `AI` Сохранить password.
-* [ ] `AI` Сохранить username.
-* [ ] `AI` Сохранить SNMP community.
-* [ ] `AI` Не удалять credentials из рабочего процесса.
-* [ ] `AI` Не выводить пароль в обычные списки без необходимости.
-* [ ] `AI` Сохранить возможность копирования пароля через UI.
+* [ ] `AI` Реализовать `CameraCredential`.
+* [ ] `AI` Сохранять username.
+* [ ] `AI` Сохранять password.
+* [ ] `AI` Сохранять SNMP community.
+* [ ] `AI` Использовать credentials для WINK.
+* [ ] `AI` Использовать SNMP community для SNMP.
+* [ ] `AI` Не выводить password в обычных API responses.
+* [ ] `AI` Не писать password в logs.
 * [ ] `AI+DEV` Отдельно решить вопрос шифрования credentials.
-* [ ] `AI` Не делать шифрование обязательным условием текущего этапа.
+* [ ] `AI` Не делать encryption блокером текущего этапа.
 
 ---
 
-# 10. SNMP measurements
+# 18. FastAPI application
 
-Предварительно:
-
-```text
-snmp_measurements
------------------
-id
-camera_id
-measured_at
-
-sys_descr
-sys_uptime_ticks
-sys_name
-
-ip_in_receives
-ip_in_hdr_errors
-ip_in_addr_errors
-ip_out_requests
-
-icmp_in_msgs
-icmp_out_echo_reps
-
-mac_address
-interface_speed
-
-active_rtsp_sessions_count
-```
-
-Задачи:
-
-* [ ] `AI` Уточнить типы всех полей.
-* [ ] `AI` Сохранить исходное uptime в ticks.
-* [ ] `AI` При необходимости хранить calculated uptime.
-* [ ] `AI` Уточнить MAC storage format.
-* [ ] `AI` Добавить indexes `(camera_id, measured_at)`.
-* [ ] `AI` Добавить индекс `measured_at`.
-* [ ] `AI` Продумать retention.
-
----
-
-# 11. RTSP clients
-
-Возможный вариант:
+Создать:
 
 ```text
-rtsp_clients
-------------
-id
-snmp_measurement_id
-client_ip
-client_port
-```
-
-Задачи:
-
-* [ ] `AI` Определить, нужен ли отдельный table.
-* [ ] `AI` Если нужен — создать relationship с SNMP measurement.
-* [ ] `AI` Добавить индекс по measurement_id.
-* [ ] `AI` Сохранить историю подключений.
-
----
-
-# 12. WINK measurements
-
-Предварительно:
-
-```text
-wink_measurements
------------------
-id
-camera_id
-measured_at
-
-status
-bitrate_kbps
-packet_loss_percent
-jitter_ms
-
-total_packets
-lost_packets
-```
-
-Задачи:
-
-* [ ] `AI` Уточнить все поля.
-* [ ] `AI` Добавить thresholds/config.
-* [ ] `AI` Добавить indexes `(camera_id, measured_at)`.
-* [ ] `AI` Определить retention.
-* [ ] `AI` Определить хранение raw result.
-
----
-
-# 13. История
-
-Главное отличие новой системы от текущей:
-
-Сейчас:
-
-```text
-camera.json
-```
-
-перезаписывается.
-
-После переделки:
-
-```text
-camera
-  │
-  ├── measurement 10:00
-  ├── measurement 10:05
-  ├── measurement 10:10
-  ├── measurement 10:15
-  └── ...
-```
-
-Задачи:
-
-* [ ] `AI` Хранить историю SNMP.
-* [ ] `AI` Хранить историю WINK.
-* [ ] `AI` Добавить запрос последнего состояния.
-* [ ] `AI` Добавить запрос истории за период.
-* [ ] `AI` Добавить retention policy.
-* [ ] `AI+DEV` Определить срок хранения подробных measurements.
-* [ ] `AI` Не удалять историю автоматически до согласования retention.
-
----
-
-# 14. Удаление JSON storage
-
-После успешной миграции:
-
-* [ ] `AI` Убрать `scanned_metrics/` как persistent storage.
-* [ ] `AI` Убрать `metrics_json/` как persistent storage.
-* [ ] `AI` Убрать запись SNMP JSON.
-* [ ] `AI` Убрать запись WINK JSON.
-* [ ] `AI` Убрать чтение JSON из report generators.
-* [ ] `AI` Проверить, что JSON не используется как скрытая БД.
-* [ ] `AI` При необходимости оставить JSON только для debug/export.
-
----
-
-# 15. Excel
-
-Сейчас:
-
-```text
-cameras.xlsx
-```
-
-является фактическим источником конфигурации камер.
-
-После переделки:
-
-```text
-PostgreSQL
-    ↑
-Web UI
-```
-
-Excel становится вспомогательным инструментом.
-
-Задачи:
-
-* [ ] `AI` Реализовать импорт камер из XLSX.
-* [ ] `AI` Сопоставить колонки старого XLSX с новой schema.
-* [ ] `AI` Не создавать дубликаты при повторном импорте.
-* [ ] `AI` Добавить валидацию XLSX.
-* [ ] `AI` Реализовать экспорт камер в XLSX.
-* [ ] `AI` После миграции убрать обязательную зависимость runtime от `cameras.xlsx`.
-* [ ] `DEV` Предоставить актуальный пример `cameras.xlsx`, если формат отличается от текущего.
-
----
-
-# 16. Backend
-
-Предлагаемый стек:
-
-```text
-FastAPI
-SQLAlchemy
-Alembic
-PostgreSQL
-Pydantic
-Uvicorn
+app/main.py
 ```
 
 Задачи:
 
 * [ ] `AI` Создать FastAPI application.
-* [ ] `AI` Создать application factory/entry point.
-* [ ] `AI` Создать database session management.
-* [ ] `AI` Создать API routers.
-* [ ] `AI` Создать services layer.
-* [ ] `AI` Отделить database access от business logic.
-* [ ] `AI` Добавить `/api/health`.
-* [ ] `AI` Добавить OpenAPI documentation.
-* [ ] `AI` Проверить graceful shutdown.
+* [ ] `AI` Создать application lifecycle.
+* [ ] `AI` Подключить logging.
+* [ ] `AI` Подключить database lifecycle.
+* [ ] `AI` Подключить routers.
+* [ ] `AI` Добавить `/health`.
+* [ ] `AI` Добавить `/health/ready`.
+* [ ] `AI` Проверять database readiness.
+* [ ] `AI` Настроить graceful shutdown.
+* [ ] `AI` Проверить OpenAPI.
+* [ ] `AI` Не помещать бизнес-логику в route handlers.
 
 ---
 
-# 17. API камер
+# 19. Pydantic schemas
 
-Минимальный API:
+Создать:
+
+```text
+app/schemas/
+├── __init__.py
+├── camera.py
+├── monitoring.py
+└── reports.py
+```
+
+Задачи:
+
+* [ ] `AI` Создать request schemas.
+* [ ] `AI` Создать response schemas.
+* [ ] `AI` Создать camera schemas.
+* [ ] `AI` Создать monitoring schemas.
+* [ ] `AI` Создать history schemas.
+* [ ] `AI` Скрыть credentials из обычных responses.
+* [ ] `AI` Валидировать входные данные через Pydantic.
+
+---
+
+# 20. API cameras
+
+Создать:
+
+```text
+app/api/cameras.py
+```
+
+Endpoints:
 
 ```text
 GET    /api/cameras
 POST   /api/cameras
-
 GET    /api/cameras/{id}
 PUT    /api/cameras/{id}
 DELETE /api/cameras/{id}
 
 POST   /api/cameras/{id}/test-snmp
 POST   /api/cameras/{id}/test-rtsp
-
-POST   /api/cameras/import
-GET    /api/cameras/export
 ```
 
 Задачи:
 
 * [ ] `AI` Реализовать GET cameras.
-* [ ] `AI` Реализовать создание камеры.
-* [ ] `AI` Реализовать редактирование.
-* [ ] `AI` Реализовать удаление.
+* [ ] `AI` Реализовать POST camera.
+* [ ] `AI` Реализовать GET camera.
+* [ ] `AI` Реализовать PUT camera.
+* [ ] `AI` Реализовать DELETE camera.
 * [ ] `AI` Реализовать enable/disable.
-* [ ] `AI` Реализовать ручной SNMP test.
-* [ ] `AI` Реализовать ручной RTSP test.
-* [ ] `AI` Реализовать импорт XLSX.
-* [ ] `AI` Реализовать экспорт XLSX.
+* [ ] `AI` Реализовать manual SNMP test.
+* [ ] `AI` Реализовать manual RTSP test.
 
 ---
 
-# 18. API мониторинга
+# 21. API monitoring
 
-Предварительно:
+Создать:
+
+```text
+app/api/monitoring.py
+```
+
+Endpoints:
 
 ```text
 GET /api/monitoring/summary
-
 GET /api/cameras/{id}/status
 GET /api/cameras/{id}/snmp
 GET /api/cameras/{id}/wink
-
-GET /api/cameras/{id}/history/snmp
-GET /api/cameras/{id}/history/wink
-
 GET /api/problems
 ```
 
 Задачи:
 
-* [ ] `AI` Реализовать summary.
+* [ ] `AI` Реализовать monitoring summary.
 * [ ] `AI` Реализовать current camera status.
-* [ ] `AI` Реализовать SNMP current state.
-* [ ] `AI` Реализовать WINK current state.
-* [ ] `AI` Реализовать historical queries.
-* [ ] `AI` Реализовать список проблем.
+* [ ] `AI` Реализовать current SNMP state.
+* [ ] `AI` Реализовать current WINK state.
+* [ ] `AI` Реализовать problems endpoint.
 
 ---
 
-# 19. Единый статус камеры
+# 22. API history
 
-Ввести:
+Создать:
 
 ```text
-ONLINE
-WARNING
-ERROR
-OFFLINE
-DISABLED
-UNKNOWN
+app/api/history.py
 ```
 
-При этом отдельно:
+Endpoints:
 
 ```text
-snmp_status
-rtsp_status
-overall_status
-```
-
-Пример:
-
-```text
-Overall: WARNING
-SNMP: GOOD
-RTSP: WARNING
+GET /api/cameras/{id}/history/snmp
+GET /api/cameras/{id}/history/wink
 ```
 
 Задачи:
 
-* [ ] `AI` Формализовать enum.
-* [ ] `AI` Формализовать правила расчёта.
-* [ ] `AI` Перенести правила из HTML в backend.
-* [ ] `AI` Добавить unit tests на status calculation.
-
----
-
-# 20. Web UI
-
-Единый интерфейс:
-
-```text
-Dashboard
-Cameras
-SNMP
-RTSP/WINK
-History
-Problems
-Settings
-```
-
-Задачи:
-
-* [ ] `AI` Создать dashboard.
-* [ ] `AI` Создать список камер.
-* [ ] `AI` Создать карточку/страницу камеры.
-* [ ] `AI` Создать SNMP section.
-* [ ] `AI` Создать RTSP/WINK section.
-* [ ] `AI` Создать history charts.
-* [ ] `AI` Создать Problems page.
-* [ ] `AI` Создать Settings page.
-* [ ] `AI` Добавить поиск.
-* [ ] `AI` Добавить фильтры.
-* [ ] `AI` Добавить сортировку.
+* [ ] `AI` Реализовать history SNMP.
+* [ ] `AI` Реализовать history WINK.
+* [ ] `AI` Добавить period filters.
 * [ ] `AI` Добавить pagination.
-* [ ] `AI` Добавить auto-refresh.
-* [ ] `AI` Добавить ручное обновление.
+* [ ] `AI` Добавить сортировку по timestamp.
+* [ ] `AI` Не загружать неограниченное количество measurements одним запросом.
 
 ---
 
-# 21. Dashboard
+# 23. API health
 
-Dashboard должен показывать:
+Создать:
 
 ```text
-Всего камер
-Активных
+app/api/health.py
+```
+
+Задачи:
+
+* [ ] `AI` Реализовать `/health`.
+* [ ] `AI` Реализовать `/health/ready`.
+* [ ] `AI` Проверять PostgreSQL для readiness.
+* [ ] `AI` Не считать HTTP 200 доказательством работоспособности мониторинга.
+* [ ] `AI` При необходимости добавить worker status.
+
+---
+
+# 24. Monitoring worker
+
+Создать:
+
+```text
+app/worker.py
+```
+
+Worker должен:
+
+```text
+start
+  |
+  v
+load enabled cameras
+  |
+  v
+monitoring cycle
+  |
+  +--> SNMP
+  |
+  +--> WINK
+  |
+  v
+save results
+  |
+  v
+sleep
+  |
+  +----> next cycle
+```
+
+Задачи:
+
+* [ ] `AI` Создать worker entry point.
+* [ ] `AI` Реализовать monitoring loop.
+* [ ] `AI` Использовать `monitoring_interval`.
+* [ ] `AI` Использовать `monitoring_retries`.
+* [ ] `AI` Корректно обрабатывать исключение одной камеры.
+* [ ] `AI` Не останавливать весь worker из-за одной камеры.
+* [ ] `AI` Реализовать graceful shutdown.
+* [ ] `AI` Логировать начало/конец cycle.
+* [ ] `AI` Проверить корректное завершение asyncio tasks.
+
+---
+
+# 25. Excel import/export
+
+`cameras.xlsx` больше не должен быть runtime source of truth.
+
+Задачи:
+
+* [ ] `AI` Создать import service.
+* [ ] `AI` Создать export service.
+* [ ] `AI` Определить mapping старого XLSX.
+* [ ] `AI` Валидировать XLSX.
+* [ ] `AI` Не создавать дубликаты при повторном импорте.
+* [ ] `AI` Корректно обновлять существующие камеры.
+* [ ] `AI` Сохранять credentials.
+* [ ] `AI` Добавить API import.
+* [ ] `AI` Добавить API export.
+* [ ] `AI` Убрать обязательную runtime-зависимость от XLSX.
+
+Endpoints:
+
+```text
+POST /api/cameras/import
+GET  /api/cameras/export
+```
+
+---
+
+# 26. Web UI
+
+Целевая структура:
+
+```text
+app/web/
+├── templates/
+└── static/
+```
+
+Задачи:
+
+* [ ] `AI` Создать базовый layout.
+* [ ] `AI` Создать Dashboard.
+* [ ] `AI` Создать список камер.
+* [ ] `AI` Создать карточку камеры.
+* [ ] `AI` Создать страницу истории.
+* [ ] `AI` Создать страницу проблем.
+* [ ] `AI` Создать управление камерой.
+* [ ] `AI` Добавить SNMP status.
+* [ ] `AI` Добавить WINK status.
+* [ ] `AI` Добавить overall status.
+* [ ] `AI` Добавить возможность просмотра credentials без раскрытия в обычном списке.
+* [ ] `AI` Добавить ручной SNMP test.
+* [ ] `AI` Добавить ручной RTSP test.
+* [ ] `AI` Добавить графики истории.
+
+---
+
+# 27. Dashboard
+
+Dashboard должен отображать:
+
+```text
+Total cameras
+Online
+Warning
+Error
+Offline
 Disabled
-
-SNMP GOOD
-SNMP WARNING
-SNMP OFFLINE
-
-RTSP GOOD
-RTSP WARNING
-RTSP ERROR
-
-Общее количество проблем
-Worker status
-Последний scan
-Следующий scan
 ```
 
-Задачи:
-
-* [ ] `AI` Реализовать summary cards.
-* [ ] `AI` Реализовать таблицу текущего состояния.
-* [ ] `AI` Реализовать быстрые фильтры.
-* [ ] `AI` Реализовать список критических проблем.
-* [ ] `AI` Реализовать время последнего обновления.
-
----
-
-# 22. Страница камеры
-
-Должна содержать:
+Для каждой камеры:
 
 ```text
-Камера
-IP
-Модель
-Производитель
-Оператор
-Номер заказа
-RTSP URL
-Credentials
-
-SNMP
-    Uptime
-    MAC
-    Interface speed
-    Traffic
-    Errors
-    Active sessions
-
-RTSP/WINK
-    Bitrate
-    Packet loss
-    Jitter
-    Stream status
-
-History
-```
-
-Задачи:
-
-* [ ] `AI` Реализовать camera details.
-* [ ] `AI` Реализовать monitoring details.
-* [ ] `AI` Реализовать history.
-* [ ] `AI` Реализовать actions.
-* [ ] `AI` Добавить edit camera.
-* [ ] `AI` Добавить manual tests.
-
----
-
-# 23. Управление камерами
-
-CRUD:
-
-```text
-CREATE
-READ
-UPDATE
-DELETE
-```
-
-Поля:
-
-```text
-camera number
-name
-IP
-manufacturer
-model
+camera
 operator
-order number
-RTSP URL
-username
-password
-SNMP community
-enabled
+IP
+SNMP status
+WINK status
+overall status
+last measurement
 ```
 
 Задачи:
 
-* [ ] `AI` Форма добавления.
-* [ ] `AI` Форма редактирования.
-* [ ] `AI` Удаление.
-* [ ] `AI` Enable/disable.
-* [ ] `AI` Validation.
-* [ ] `AI` Duplicate detection.
-* [ ] `AI` Confirmation before delete.
+* [ ] `AI` Реализовать summary endpoint.
+* [ ] `AI` Реализовать dashboard.
+* [ ] `AI` Реализовать получение последнего measurement эффективно.
+* [ ] `AI` Не выполнять N+1 SQL queries.
+* [ ] `AI` Проверить производительность Dashboard.
 
 ---
 
-# 24. Credentials UI
+# 28. History
 
-Пароли НЕ удалять.
-
-Задачи:
-
-* [ ] `AI` Добавить password field.
-* [ ] `AI` Добавить username.
-* [ ] `AI` Добавить SNMP community.
-* [ ] `AI` Возможность показать/скрыть пароль.
-* [ ] `AI` Возможность копирования.
-* [ ] `AI` Не показывать password в dashboard.
-* [ ] `AI` Не включать password в обычный поиск.
-* [ ] `AI+DEV` Позже рассмотреть encryption-at-rest.
-
----
-
-# 25. Конфигурация
-
-Не хранить runtime settings в Python.
-
-Создать:
+История должна позволять анализировать:
 
 ```text
-.env
-.env.example
-config/
-    config.yaml
+SNMP
+WINK
+bitrate
+packet loss
+jitter
+RTSP clients
+interface speed
+uptime
+status changes
 ```
 
-Предварительные параметры:
+Задачи:
+
+* [ ] `AI` Реализовать historical queries.
+* [ ] `AI` Реализовать time range filtering.
+* [ ] `AI` Реализовать pagination.
+* [ ] `AI` Реализовать графики.
+* [ ] `AI` Реализовать выбор периода.
+* [ ] `AI+DEV` Определить retention policy.
+* [ ] `AI` Не удалять history автоматически до согласования retention.
+
+---
+
+# 29. JSON migration
+
+Старые директории:
 
 ```text
-DATABASE_URL
-
-SNMP_PORT
-SNMP_TIMEOUT
-SNMP_RETRIES
-SNMP_CONCURRENCY
-
-WINK_EXECUTABLE
-WINK_CONCURRENCY
-WINK_MEASURE_DURATION
-
-MONITORING_INTERVAL
-
-RETENTION_DAYS
+scanned_metrics/
+metrics_json/
 ```
 
 Задачи:
 
-* [ ] `AI` Создать configuration layer.
-* [ ] `AI` Создать Pydantic settings.
-* [ ] `AI` Создать `.env.example`.
-* [ ] `AI` Убрать hardcoded runtime settings.
-* [ ] `AI` Проверить отсутствие секретов в Git.
-* [ ] `DEV` Указать production values перед deployment.
+* [ ] `AI` Проанализировать фактические JSON examples.
+* [ ] `AI` Создать migration/import script.
+* [ ] `AI` Импортировать камеры.
+* [ ] `AI` Импортировать SNMP measurements.
+* [ ] `AI` Импортировать RTSP clients.
+* [ ] `AI` Импортировать WINK measurements.
+* [ ] `AI` Импортировать WINK streams.
+* [ ] `AI` Проверить количество импортированных записей.
+* [ ] `AI` Проверить отсутствие потери данных.
+* [ ] `AI` Проверить timestamps.
+* [ ] `AI` Только после успешной миграции убрать JSON storage из runtime.
 
 ---
 
-# 26. Paths
+# 30. Удаление старой архитектуры
 
-Сейчас используются относительные пути:
+Старые файлы:
 
 ```text
-cameras.xlsx
-scanned_metrics
-metrics_json
-report-snmp.html
-report-wink.html
+scan-snmp.py
+scan-wink.py
+generate-snmp-report.py
+generate-wink-report.py
 ```
 
-Задачи:
-
-* [ ] `AI` Убрать зависимость от текущего working directory.
-* [ ] `AI` Убрать JSON directories после миграции.
-* [ ] `AI` Убрать runtime dependency от HTML files.
-* [ ] `AI` Определить единый application root.
-* [ ] `AI` Проверить работу при запуске через systemd.
-
----
-
-# 27. Dependencies
-
-Создать:
-
-```text
-pyproject.toml
-```
-
-или согласованный dependency file.
-
-Минимальный ожидаемый стек:
-
-```text
-fastapi
-uvicorn
-sqlalchemy
-alembic
-asyncpg
-pydantic
-pydantic-settings
-pysnmp
-openpyxl
-```
+пока НЕ удалять.
 
 Задачи:
 
-* [ ] `AI` Определить фактические зависимости.
-* [ ] `AI` Удалить неиспользуемые зависимости.
-* [ ] `AI` Зафиксировать совместимые версии.
-* [ ] `AI` Создать pyproject.toml.
-* [ ] `AI` Проверить чистую установку.
-* [ ] `AI` Проверить запуск в чистом virtualenv.
-* [ ] `AI` Документировать установку.
+* [ ] `AI` Сначала реализовать новую архитектуру.
+* [ ] `AI` Реализовать новую SNMP pipeline.
+* [ ] `AI` Реализовать новую WINK pipeline.
+* [ ] `AI` Реализовать DB storage.
+* [ ] `AI` Реализовать API.
+* [ ] `AI` Реализовать worker.
+* [ ] `AI` Провести regression testing.
+* [ ] `AI` Только после этого удалить старые runtime scripts.
+* [ ] `AI` При необходимости оставить migration/debug utilities.
 
 ---
 
-# 28. Logging
-
-Заменить:
-
-```text
-print()
-except Exception: pass
-```
-
-на:
-
-```text
-logging
-```
-
-Задачи:
-
-* [ ] `AI` Создать logging configuration.
-* [ ] `AI` Добавить INFO.
-* [ ] `AI` Добавить WARNING.
-* [ ] `AI` Добавить ERROR.
-* [ ] `AI` Добавить DEBUG.
-* [ ] `AI` Добавить camera identifier в log context.
-* [ ] `AI` Добавить scan identifier.
-* [ ] `AI` Убрать silent exception swallowing.
-* [ ] `AI` Проверить systemd journal output.
-
----
-
-# 29. Error handling
-
-Проблемные места текущего проекта:
-
-```text
-except Exception:
-    pass
-```
-
-и слишком широкие обработчики.
-
-Задачи:
-
-* [ ] `AI` Найти все broad exception handlers.
-* [ ] `AI` Разделить ожидаемые и неожиданные ошибки.
-* [ ] `AI` Добавить понятные error types.
-* [ ] `AI` Логировать traceback там, где это необходимо.
-* [ ] `AI` Не прекращать весь monitoring из-за одной камеры.
-* [ ] `AI` Сохранять failed measurement.
-* [ ] `AI` Устанавливать корректный camera status при timeout.
-
----
-
-# 30. Worker architecture
-
-Целевая архитектура:
-
-```text
-PostgreSQL
-    ▲
-    │
-Monitoring Worker
-    │
-    ├── SNMP asyncio
-    │
-    └── WINK process execution
-```
-
-Отдельно:
-
-```text
-FastAPI Web
-    │
-    ▼
-PostgreSQL
-```
-
-Задачи:
-
-* [ ] `AI` Создать monitoring worker.
-* [ ] `AI` Сделать worker независимым от Web UI.
-* [ ] `AI` Добавить monitoring interval.
-* [ ] `AI` Добавить graceful shutdown.
-* [ ] `AI` Добавить worker heartbeat.
-* [ ] `AI` Защититься от двойного запуска worker.
-* [ ] `AI` Добавить worker health state в БД/API.
-
----
-
-# 31. Systemd
-
-Предлагается два сервиса:
-
-```text
-monitoring-rsvn-web.service
-monitoring-rsvn-worker.service
-```
-
-Задачи:
-
-* [ ] `AI` Создать systemd unit для Web.
-* [ ] `AI` Создать systemd unit для Worker.
-* [ ] `AI` Настроить WorkingDirectory.
-* [ ] `AI` Настроить User.
-* [ ] `AI` Настроить EnvironmentFile.
-* [ ] `AI` Настроить Restart policy.
-* [ ] `AI` Проверить запуск после reboot.
-* [ ] `AI` Проверить journalctl.
-* [ ] `AI` Проверить graceful restart.
-
----
-
-# 32. Security
-
-Пароли сохраняются, но система должна обращаться с ними осознанно.
-
-Задачи:
-
-* [ ] `AI` Не писать credentials в application logs.
-* [ ] `AI` Не писать credentials в обычные monitoring logs.
-* [ ] `AI` Не включать password в dashboard table.
-* [ ] `AI` Не включать password в search.
-* [ ] `AI` Не отправлять password клиенту без необходимости.
-* [ ] `AI` Проверить RTSP URL на наличие credentials.
-* [ ] `AI` Не логировать полный RTSP URL, если он содержит password.
-* [ ] `AI+DEV` Определить требования к encryption-at-rest.
-* [ ] `AI` Проверить `.gitignore`.
-
----
-
-# 33. Excel export
-
-Текущий UI умеет экспортировать таблицу.
-
-Новая система должна сохранить эту возможность.
-
-Задачи:
-
-* [ ] `AI` Реализовать export cameras.
-* [ ] `AI` Реализовать export monitoring results.
-* [ ] `AI` Реализовать export filtered results.
-* [ ] `AI` Решить, экспортировать ли credentials.
-* [ ] `DEV` Подтвердить необходимость экспорта password.
-
----
-
-# 34. SheetJS
-
-Текущие отчёты используют:
-
-```text
-xlsx.full.min.js
-```
-
-при этом файл не является частью текущей структуры проекта.
-
-Задачи:
-
-* [ ] `AI` Убрать зависимость старых report generators.
-* [ ] `AI` Реализовать Excel export backend/frontend корректным способом.
-* [ ] `AI` Не зависеть от отсутствующего локального JS файла.
-* [ ] `AI` Проверить экспорт после миграции.
-
----
-
-# 35. Accessibility / UI
-
-Сохранить полезную функцию color-blind mode из текущего WINK report.
-
-Задачи:
-
-* [ ] `AI` Перенести color-blind mode.
-* [ ] `AI` Не полагаться только на цвет для статуса.
-* [ ] `AI` Использовать текстовые статусы.
-* [ ] `AI` Добавить понятные icons/labels.
-* [ ] `AI` Проверить responsive layout.
-
----
-
-# 36. Performance
-
-Задачи:
-
-* [ ] `AI` Добавить database indexes.
-* [ ] `AI` Не загружать всю историю камеры сразу.
-* [ ] `AI` Использовать pagination.
-* [ ] `AI` Ограничивать history query.
-* [ ] `AI` Использовать async DB access.
-* [ ] `AI` Проверить PostgreSQL connection pool.
-* [ ] `AI` Проверить SNMP concurrency.
-* [ ] `AI` Проверить WINK concurrency.
-* [ ] `AI` Провести нагрузочный тест.
-
----
-
-# 37. Tests
+# 31. Tests
 
 Создать:
 
 ```text
 tests/
-├── test_camera.py
-├── test_snmp.py
-├── test_wink.py
-├── test_status.py
-├── test_database.py
-├── test_api.py
-└── test_import.py
 ```
 
-Задачи:
-
-* [ ] `AI` Unit tests для camera model.
-* [ ] `AI` Unit tests для status calculation.
-* [ ] `AI` Unit tests для uptime parser.
-* [ ] `AI` Unit tests для MAC parser.
-* [ ] `AI` Unit tests для speed parser.
-* [ ] `AI` Unit tests для RTSP IP extraction.
-* [ ] `AI` Unit tests для packet loss calculation.
-* [ ] `AI` Tests SNMP error handling.
-* [ ] `AI` Tests WINK error handling.
-* [ ] `AI` API tests.
-* [ ] `AI` Database integration tests.
-* [ ] `AI` XLSX import tests.
-
----
-
-# 38. Перенос старых алгоритмов
-
-Не потерять существующую бизнес-логику.
-
-## SNMP
-
-Сохранить:
-
-* [ ] `AI` scalar OID collection.
-* [ ] `AI` TCP table walk.
-* [ ] `AI` RTSP port 554 detection.
-* [ ] `AI` filtering собственных сетей.
-* [ ] `AI` active clients.
-* [ ] `AI` uptime.
-* [ ] `AI` interface speed.
-* [ ] `AI` MAC.
-* [ ] `AI` IP counters.
-
-## WINK
-
-Сохранить:
-
-* [ ] `AI` внешний `wink-rtsp-stats.exe`.
-* [ ] `AI` measurement duration.
-* [ ] `AI` bitrate calculation.
-* [ ] `AI` packet loss calculation.
-* [ ] `AI` jitter calculation.
-* [ ] `AI` stream parsing.
-* [ ] `AI` status thresholds.
-
----
-
-# 39. Business rules
-
-Текущие SNMP критерии:
+Структура:
 
 ```text
-Uptime < 1 день
-OR
-Interface speed < 100 Mbps
+tests/
+├── unit/
+├── integration/
+└── api/
 ```
+
+## Unit tests
+
+* [ ] `AI` Test settings.
+* [ ] `AI` Test SNMP status.
+* [ ] `AI` Test WINK status.
+* [ ] `AI` Test bitrate calculation.
+* [ ] `AI` Test packet loss calculation.
+* [ ] `AI` Test camera validation.
+* [ ] `AI` Test WINK JSON parsing.
+* [ ] `AI` Test SNMP result parsing.
+
+## Database tests
+
+* [ ] `AI` Test models.
+* [ ] `AI` Test relationships.
+* [ ] `AI` Test constraints.
+* [ ] `AI` Test migrations.
+* [ ] `AI` Test cascade behavior.
+
+## API tests
+
+* [ ] `AI` Test health.
+* [ ] `AI` Test cameras CRUD.
+* [ ] `AI` Test monitoring endpoints.
+* [ ] `AI` Test history endpoints.
+* [ ] `AI` Test validation errors.
+* [ ] `AI` Test credentials are not exposed accidentally.
+
+---
+
+# 32. Security
 
 Задачи:
 
-* [ ] `AI` Перенести в backend.
-* [ ] `AI` Сделать thresholds конфигурируемыми.
-* [ ] `AI` Добавить тесты.
+* [ ] `AI` Проверить отсутствие passwords в source code.
+* [ ] `AI` Проверить отсутствие database passwords в source code.
+* [ ] `AI` Проверить `.env` handling.
+* [ ] `AI` Проверить `.gitignore`.
+* [ ] `AI` Не логировать credentials.
+* [ ] `AI` Не возвращать passwords через обычный camera API.
+* [ ] `AI` Не раскрывать RTSP credentials в HTML без явного действия пользователя.
+* [ ] `AI` Проверить subprocess argument handling.
+* [ ] `AI` Не использовать shell command strings без необходимости.
+* [ ] `AI` Проверить path handling.
+* [ ] `AI` Проверить SQL injection resistance через SQLAlchemy.
+* [ ] `AI+DEV` Определить механизм хранения secrets для production.
 
-Текущие WINK критерии:
+---
+
+# 33. PEP 8 / code quality
+
+Задачи:
+
+* [ ] `AI` Проверять код через Ruff.
+* [ ] `AI` Использовать type hints.
+* [ ] `AI` Использовать docstrings для публичных функций.
+* [ ] `AI` Не допускать циклических imports.
+* [ ] `AI` Соблюдать single responsibility.
+* [ ] `AI` Не допускать giant modules.
+* [ ] `AI` Не допускать giant functions.
+* [ ] `AI` Не смешивать API/database/scanner logic.
+* [ ] `AI` Не использовать глобальное mutable state без необходимости.
+
+Проверка:
+
+```bash
+ruff check .
+ruff format --check .
+```
+
+---
+
+# 34. Архитектурные правила
+
+## Scanner
+
+Scanner отвечает только за взаимодействие с внешней системой:
 
 ```text
-loss > 10%       => BAD
-
-bitrate < 50 kbps
-                  => STALLED
-
-bitrate < 5 Mbps => LOW BITRATE
-
-loss > 2%        => WARNING
-
-иначе             => GOOD
+SNMP
+WINK executable
 ```
 
-Задачи:
-
-* [ ] `AI` Перенести в backend.
-* [ ] `AI` Сделать thresholds конфигурируемыми.
-* [ ] `AI` Добавить тесты.
-
----
-
-# 40. Новая структура проекта
-
-Предварительная структура:
+Scanner НЕ должен:
 
 ```text
-monitoring-rsvn/
-│
-├── app/
-│   ├── __init__.py
-│   ├── main.py
-│   ├── config.py
-│   ├── database.py
-│   ├── logging_config.py
-│   │
-│   ├── models/
-│   │   ├── camera.py
-│   │   ├── credentials.py
-│   │   ├── snmp.py
-│   │   ├── wink.py
-│   │   └── rtsp_client.py
-│   │
-│   ├── schemas/
-│   │   ├── camera.py
-│   │   ├── monitoring.py
-│   │   └── reports.py
-│   │
-│   ├── services/
-│   │   ├── camera_service.py
-│   │   ├── snmp_service.py
-│   │   ├── wink_service.py
-│   │   └── monitoring_service.py
-│   │
-│   ├── scanners/
-│   │   ├── snmp_scanner.py
-│   │   └── wink_scanner.py
-│   │
-│   ├── api/
-│   │   ├── cameras.py
-│   │   ├── monitoring.py
-│   │   ├── history.py
-│   │   └── health.py
-│   │
-│   ├── web/
-│   │   ├── templates/
-│   │   └── static/
-│   │
-│   └── utils/
-│       ├── parsing.py
-│       ├── network.py
-│       └── formatting.py
-│
-├── migrations/
-│
-├── tests/
-│
-├── config/
-│   └── config.yaml
-│
-├── systemd/
-│   ├── monitoring-rsvn-web.service
-│   └── monitoring-rsvn-worker.service
-│
-├── scripts/
-│
-├── .env.example
-├── .gitignore
-├── pyproject.toml
-├── README.md
-└── TODO.md
+write database
+handle HTTP
+render HTML
+```
+
+## Service
+
+Service отвечает за:
+
+```text
+business logic
+orchestration
+database interaction
+status calculation
+```
+
+## API
+
+API отвечает только за:
+
+```text
+HTTP
+validation
+serialization
+dependency injection
+```
+
+## Models
+
+Models отвечают только за:
+
+```text
+database schema
+relationships
+constraints
+```
+
+## Worker
+
+Worker отвечает только за:
+
+```text
+scheduled monitoring
+```
+
+---
+
+# 35. Systemd
+
+После реализации приложения подготовить:
+
+```text
+systemd/
+├── monitoring-rsvn-web.service
+└── monitoring-rsvn-worker.service
 ```
 
 Задачи:
 
-* [ ] `AI` Финализировать структуру.
-* [ ] `AI` Создать directories.
-* [ ] `AI` Перенести код по ответственности.
-* [ ] `AI` Удалить монолитные старые scripts после миграции.
-* [ ] `AI` Обновить README.
+* [ ] `AI` Создать web service.
+* [ ] `AI` Создать worker service.
+* [ ] `AI` Настроить restart policy.
+* [ ] `AI` Настроить environment/.env.
+* [ ] `AI` Настроить WorkingDirectory.
+* [ ] `AI` Настроить User/Group.
+* [ ] `AI` Настроить logging.
+* [ ] `AI` Настроить dependency on PostgreSQL.
+* [ ] `AI` Проверить graceful shutdown.
+* [ ] `AI` Проверить automatic restart после failure.
 
 ---
 
-# 41. Порядок реализации
+# 36. Configuration / deployment
 
-## Phase 1 — Architecture
+Создать:
 
-* [x] `AI` Провести аудит текущего проекта.
-* [x] `AI` Зафиксировать текущие четыре скрипта.
-* [x] `AI` Зафиксировать текущие данные SNMP.
-* [x] `AI` Зафиксировать текущие данные WINK.
-* [x] `AI` Зафиксировать текущие business rules.
-* [ ] `AI` Финализировать schema БД.
-* [ ] `AI+DEV` Утвердить schema БД.
+```text
+config/
+```
 
-## Phase 2 — Database
+Задачи:
 
-* [ ] `AI` PostgreSQL setup.
-* [ ] `AI` SQLAlchemy.
-* [ ] `AI` Alembic.
-* [ ] `AI` Initial migration.
-* [ ] `AI` Indexes.
-* [ ] `AI` Constraints.
-* [ ] `AI` DB tests.
-
-## Phase 3 — Configuration
-
-* [ ] `AI` pyproject.toml.
-* [ ] `AI` config layer.
-* [ ] `AI` `.env.example`.
-* [ ] `AI` Remove hardcoded settings.
-
-## Phase 4 — SNMP
-
-* [ ] `AI` Async architecture.
-* [ ] `AI` Semaphore.
-* [ ] `AI` SNMP scanner.
-* [ ] `AI` Database persistence.
-* [ ] `AI` Error handling.
-* [ ] `AI` Tests.
-
-## Phase 5 — WINK
-
-* [ ] `AI` WINK service.
-* [ ] `AI` External process management.
-* [ ] `AI` Concurrency control.
-* [ ] `AI` Database persistence.
-* [ ] `AI` Tests.
-
-## Phase 6 — Backend
-
-* [ ] `AI` FastAPI.
-* [ ] `AI` Camera API.
-* [ ] `AI` Monitoring API.
-* [ ] `AI` History API.
-* [ ] `AI` Health API.
-
-## Phase 7 — Web UI
-
-* [ ] `AI` Dashboard.
-* [ ] `AI` Cameras.
-* [ ] `AI` Camera details.
-* [ ] `AI` SNMP.
-* [ ] `AI` RTSP/WINK.
-* [ ] `AI` History.
-* [ ] `AI` Problems.
-* [ ] `AI` Settings.
-* [ ] `AI` CRUD cameras.
-* [ ] `AI` Import XLSX.
-* [ ] `AI` Export XLSX.
-
-## Phase 8 — Worker
-
-* [ ] `AI` Monitoring scheduler.
-* [ ] `AI` SNMP async scan.
-* [ ] `AI` WINK scan.
-* [ ] `AI` DB persistence.
-* [ ] `AI` Worker health.
-* [ ] `AI` Graceful shutdown.
-* [ ] `AI` Duplicate-run protection.
-
-## Phase 9 — Deployment
-
-* [ ] `AI` systemd Web service.
-* [ ] `AI` systemd Worker service.
-* [ ] `AI` Environment configuration.
-* [ ] `AI` Logging.
-* [ ] `AI` Restart policy.
-* [ ] `AI` Reboot test.
-
-## Phase 10 — Final QA
-
-* [ ] `AI` Syntax check.
-* [ ] `AI` Import check.
-* [ ] `AI` Unit tests.
-* [ ] `AI` Integration tests.
-* [ ] `AI` Database tests.
-* [ ] `AI` SNMP tests.
-* [ ] `AI` WINK tests.
-* [ ] `AI` API tests.
-* [ ] `AI` UI tests.
-* [ ] `AI` Load test.
-* [ ] `AI` Security audit.
-* [ ] `AI` Architecture audit.
-* [ ] `AI+DEV` Production acceptance test.
+* [ ] `AI` Подготовить `.env.example`.
+* [ ] `AI` Документировать database settings.
+* [ ] `AI` Документировать SNMP settings.
+* [ ] `AI` Документировать WINK settings.
+* [ ] `AI` Документировать monitoring interval.
+* [ ] `AI` Документировать concurrency.
+* [ ] `AI` Документировать filesystem paths.
+* [ ] `AI` Убедиться, что production secrets не попадают в Git.
 
 ---
 
-# 42. Definition of Done
+# 37. README
 
-Проект считается переработанным только если одновременно выполнены все условия:
+Текущий репозиторий должен иметь полноценный README.
 
-* [ ] PostgreSQL является основным хранилищем.
-* [ ] JSON не используется как постоянное хранилище.
-* [ ] Камеры управляются через Web UI.
-* [ ] Excel не является обязательным runtime dependency.
-* [ ] SNMP работает через чистый asyncio.
-* [ ] SNMP не использует ThreadPoolExecutor.
-* [ ] WINK имеет контролируемый concurrency.
-* [ ] WINK продолжает работать через `wink-rtsp-stats.exe`.
-* [ ] Все результаты сохраняются в PostgreSQL.
-* [ ] История measurements доступна через UI.
-* [ ] Есть единый Dashboard.
-* [ ] Есть единая страница камеры.
-* [ ] Есть SNMP + RTSP/WINK в одном интерфейсе.
-* [ ] Есть CRUD камер.
-* [ ] Пароли сохранены и доступны системе.
-* [ ] Credentials не попадают случайно в обычные логи.
-* [ ] Есть configuration layer.
-* [ ] Есть dependency management.
-* [ ] Есть Alembic migrations.
-* [ ] Есть logging.
-* [ ] Есть tests.
-* [ ] Есть health check.
-* [ ] Есть systemd services.
-* [ ] После reboot система автоматически запускается.
-* [ ] Worker и Web работают независимо.
-* [ ] Нет зависимости от текущего working directory.
-* [ ] README соответствует новой архитектуре.
-* [ ] Старые HTML report generators больше не являются частью runtime.
-* [ ] Финальный аудит пройден.
+Задачи:
+
+* [ ] `AI` Создать/обновить `README.md`.
+* [ ] `AI` Описать назначение проекта.
+* [ ] `AI` Описать архитектуру.
+* [ ] `AI` Описать зависимости.
+* [ ] `AI` Описать установку.
+* [ ] `AI` Описать PostgreSQL setup.
+* [ ] `AI` Описать Alembic.
+* [ ] `AI` Описать `.env`.
+* [ ] `AI` Описать запуск Web.
+* [ ] `AI` Описать запуск Worker.
+* [ ] `AI` Описать systemd.
+* [ ] `AI` Описать тесты.
+* [ ] `AI` Описать migration/import старых данных.
 
 ---
 
-# 43. Правило работы AI-агента
+# 38. Performance
 
-Перед изменением архитектурно значимого компонента:
+Задачи:
 
-1. Проверить этот TODO.
-2. Проверить фактическое состояние репозитория.
-3. Не считать пункт `[x]`, пока изменение не проверено.
-4. После каждого завершённого этапа обновлять статус.
-5. Не удалять старую реализацию до появления новой рабочей реализации.
-6. Не ломать существующую SNMP/WINK бизнес-логику без фиксации изменения.
-7. Не удалять passwords.
-8. Не считать отсутствие ошибки запуска доказательством корректности.
-9. После каждого крупного этапа выполнять тесты.
-10. Перед финальным удалением старого кода провести regression check.
+* [ ] `AI` Проверить SNMP concurrency.
+* [ ] `AI` Проверить WINK concurrency.
+* [ ] `AI` Проверить PostgreSQL connection pool.
+* [ ] `AI` Проверить Dashboard query performance.
+* [ ] `AI` Проверить history query performance.
+* [ ] `AI` Проверить отсутствие N+1 queries.
+* [ ] `AI` Проверить большое количество камер.
+* [ ] `AI` Проверить большое количество historical measurements.
+* [ ] `AI` Проверить memory usage worker.
+* [ ] `AI` Проверить корректность cleanup asyncio tasks.
+
+---
+
+# 39. Retention
+
+История является одной из основных функций новой системы.
+
+Задачи:
+
+* [ ] `AI+DEV` Определить срок хранения SNMP measurements.
+* [ ] `AI+DEV` Определить срок хранения WINK measurements.
+* [ ] `AI+DEV` Определить срок хранения stream measurements.
+* [ ] `AI+DEV` Определить срок хранения RTSP clients.
+* [ ] `AI` Спроектировать retention mechanism.
+* [ ] `AI` Не включать автоматическое удаление до утверждения политики.
+
+---
+
+# 40. Migration / rollback strategy
+
+Задачи:
+
+* [ ] `AI` Подготовить backup PostgreSQL.
+* [ ] `AI` Подготовить migration procedure.
+* [ ] `AI` Подготовить rollback procedure.
+* [ ] `AI` Проверить Alembic downgrade.
+* [ ] `AI` Проверить импорт старых JSON.
+* [ ] `AI` Проверить целостность данных после migration.
+* [ ] `AI` Не удалять старые JSON до подтверждения успешной миграции.
+* [ ] `AI` Не удалять старые Python scripts до regression testing.
+
+---
+
+# 41. Documentation
+
+Уже существуют:
+
+```text
+docs/ARCHITECTURE.md
+docs/DATABASE_SCHEMA.md
+```
+
+Задачи:
+
+* [x] `AI` Создать architecture documentation.
+* [x] `AI` Создать database schema documentation.
+* [ ] `AI` Добавить API documentation.
+* [ ] `AI` Добавить deployment documentation.
+* [ ] `AI` Добавить migration documentation.
+* [ ] `AI` Добавить monitoring flow documentation.
+* [ ] `AI` Поддерживать документацию синхронно с кодом.
+
+---
+
+# 42. Проверка текущего состояния репозитория
+
+На момент обновления TODO фактически существуют:
+
+```text
+TODO.md
+pyproject.toml
+
+app/
+    config.py
+    database.py
+
+docs/
+    ARCHITECTURE.md
+    DATABASE_SCHEMA.md
+
+scan-snmp.py
+scan-wink.py
+generate-snmp-report.py
+generate-wink-report.py
+```
+
+Пока отсутствуют:
+
+```text
+app/__init__.py
+app/main.py
+app/worker.py
+
+app/models/
+app/schemas/
+app/services/
+app/scanners/
+app/api/
+app/web/
+
+migrations/
+tests/
+systemd/
+config/
+```
+
+Следовательно, проект находится между этапами:
+
+```text
+Архитектура
+     DONE
+       |
+       v
+Database design
+     DONE
+       |
+       v
+Configuration
+     DONE
+       |
+       v
+Database infrastructure
+     DONE
+       |
+       v
+ORM models
+     NEXT
+       |
+       v
+Alembic
+       |
+       v
+Scanners / Services
+       |
+       v
+FastAPI / Worker
+       |
+       v
+Web UI
+       |
+       v
+Tests
+       |
+       v
+Migration
+       |
+       v
+Production
+```
+
+---
+
+# 43. Что НЕ считать выполненным
+
+Следующие пункты нельзя считать выполненными только потому, что соответствующие документы или зависимости уже существуют:
+
+* наличие `pyproject.toml` не означает готовое приложение;
+* наличие `app/database.py` не означает готовую БД;
+* наличие `docs/DATABASE_SCHEMA.md` не означает созданные таблицы;
+* наличие `docs/ARCHITECTURE.md` не означает реализованную архитектуру;
+* наличие FastAPI в dependencies не означает работающий API;
+* наличие SQLAlchemy не означает наличие ORM models;
+* наличие Alembic в dependencies не означает наличие migrations;
+* наличие entry points в `pyproject.toml` не означает, что web/worker уже запускаются;
+* наличие `asyncpg` не означает подключение к рабочему PostgreSQL;
+* наличие конфигурационных параметров не означает их использование всеми компонентами.
 
 ---
 
 # 44. Текущая точка проекта
 
-**Текущий статус:**
+## Фактический статус
 
 ```text
-Аудит исходного проекта       DONE
-Целевая архитектура           DEFINED
-Схема БД                      DRAFT
-Web UI концепция              DEFINED
-SNMP asyncio migration        TODO
-WINK migration                TODO
-FastAPI                       TODO
-PostgreSQL                    TODO
-Alembic                       TODO
-CRUD cameras                  TODO
-History                       TODO
-systemd                       TODO
-Tests                         TODO
-Final QA                      TODO
+Исходный аудит                 DONE
+Целевая архитектура             DONE
+ARCHITECTURE.md                 DONE
+DATABASE_SCHEMA.md              DONE
+
+pyproject.toml                  DONE
+Application configuration       DONE
+Database infrastructure         DONE
+
+ORM models                      TODO
+Alembic infrastructure          TODO
+Initial DB migration             TODO
+
+SNMP scanner                    TODO
+SNMP service                    TODO
+WINK scanner                    TODO
+WINK service                    TODO
+Monitoring service              TODO
+
+FastAPI application              TODO
+API cameras                     TODO
+API monitoring                  TODO
+API history                     TODO
+API health                      TODO
+
+Monitoring worker               TODO
+
+Excel import/export             TODO
+JSON migration                  TODO
+
+Web UI                           TODO
+Dashboard                        TODO
+History UI                       TODO
+
+Tests                            TODO
+Logging                          TODO
+Security audit                   TODO
+Performance testing              TODO
+systemd                          TODO
+README                           TODO
+Production deployment            TODO
+Final QA                         TODO
 ```
 
-**Следующее действие:**
+---
 
-> Спроектировать и утвердить окончательную PostgreSQL schema на основании фактических полей текущих SNMP/WINK результатов, после чего создать SQLAlchemy models и Alembic initial migration.
+# 45. Ближайший этап разработки
 
-**Важно:** до завершения этого этапа не начинать массовый рефакторинг четырёх старых файлов.
+## NEXT STEP
+
+> **Создать SQLAlchemy ORM-модели на основании утверждённой схемы `docs/DATABASE_SCHEMA.md`.**
+
+Порядок:
+
+```text
+1. app/__init__.py
+       ↓
+2. app/models/__init__.py
+       ↓
+3. camera.py
+       ↓
+4. credentials.py
+       ↓
+5. snmp.py
+       ↓
+6. rtsp_client.py
+       ↓
+7. wink.py
+       ↓
+8. подключение моделей к Base
+       ↓
+9. проверка relationships
+       ↓
+10. Alembic
+       ↓
+11. initial migration
+```
+
+До завершения этого этапа:
+
+* не удалять старые скрипты;
+* не удалять JSON storage;
+* не начинать Web UI;
+* не считать PostgreSQL migration завершённой;
+* не переносить старую бизнес-логику вслепую.
+
+---
+
+# 46. Правила дальнейшей разработки
+
+1. Не переписывать рабочую логику без необходимости.
+2. Сохранять существующую семантику SNMP и WINK.
+3. Не удалять credentials камер.
+4. Не выводить credentials в обычных логах/API.
+5. PostgreSQL является source of truth после завершения миграции.
+6. JSON использовать только для migration/debug/export после перехода.
+7. Scanner не должен обращаться к PostgreSQL напрямую.
+8. API не должен содержать бизнес-логику.
+9. Business logic должна находиться в services.
+10. ORM models не должны содержать orchestration.
+11. Worker не должен содержать SQL/HTTP implementation details.
+12. Все изменения схемы БД выполнять через Alembic.
+13. Не использовать `Base.metadata.create_all()` как production migration mechanism.
+14. Не считать наличие файла доказательством реализации функции.
+15. После каждого крупного этапа запускать автоматические проверки.
+16. Перед удалением старого кода выполнять regression check.
+17. Не удалять старые данные до подтверждения успешной миграции.
+18. Не допускать silent exception handling.
+19. Не допускать hardcoded production secrets.
+20. Поддерживать `TODO.md`, `ARCHITECTURE.md` и `DATABASE_SCHEMA.md` синхронными с кодом.
+
+---
+
+# 47. Критерий готовности проекта
+
+Проект считается готовым к production только после выполнения всех обязательных этапов:
+
+```text
+[ ] PostgreSQL работает
+[ ] Alembic migrations работают
+[ ] ORM models готовы
+[ ] SNMP scanner работает
+[ ] WINK scanner работает
+[ ] Services готовы
+[ ] Worker работает
+[ ] FastAPI работает
+[ ] Camera CRUD работает
+[ ] Monitoring API работает
+[ ] History API работает
+[ ] Web UI работает
+[ ] Excel import/export работает
+[ ] Старые JSON данные мигрированы
+[ ] Tests проходят
+[ ] Ruff проходит
+[ ] Security audit пройден
+[ ] Performance проверена
+[ ] systemd настроен
+[ ] README актуален
+[ ] Regression testing пройден
+[ ] Старые runtime scripts удалены или окончательно переведены в migration/debug utilities
+```
+
+---
+
+# 48. Текущая точка остановки
+
+**Мы остановились непосредственно перед созданием ORM-моделей.**
+
+Текущая последовательность разработки:
+
+```text
+                    DONE
+                     |
+                     v
+            Architecture design
+                     |
+                     v
+             Database schema
+                     |
+                     v
+              pyproject.toml
+                     |
+                     v
+             app/config.py
+                     |
+                     v
+            app/database.py
+                     |
+                     v
+              >>> NEXT <<<
+                     |
+                     v
+             SQLAlchemy Models
+                     |
+                     v
+              Alembic migration
+                     |
+                     v
+             SNMP / WINK layers
+                     |
+                     v
+             FastAPI + Worker
+                     |
+                     v
+                  Web UI
+                     |
+                     v
+                Migration
+                     |
+                     v
+               Tests / QA
+                     |
+                     v
+                Production
+```
+
+**Следующее конкретное действие:**
+
+> Создать `app/models/` и реализовать шесть ORM-моделей (`Camera`, `CameraCredential`, `SnmpMeasurement`, `RtspClient`, `WinkMeasurement`, `WinkStream`) строго по `docs/DATABASE_SCHEMA.md`, после чего подготовить первую Alembic migration.
