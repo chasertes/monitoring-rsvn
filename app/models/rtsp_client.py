@@ -2,7 +2,8 @@
 RTSP client ORM model.
 """
 
-from sqlalchemy import BigInteger, ForeignKey, INET, Integer
+from sqlalchemy import BigInteger, ForeignKey, Integer
+from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
