@@ -76,9 +76,10 @@ monitoring-rsvn/
 │   ├── models/
 │   │   ├── camera.py
 │   │   ├── credentials.py
-│   │   ├── snmp.py
+│   │   ├── snmp_measurement.py
 │   │   ├── rtsp_client.py
-│   │   └── wink.py
+│   │   └── wink_measurement.py
+│   │   └── wink_stream.py
 │   │
 │   ├── schemas/
 │   │   ├── camera.py
