@@ -1,0 +1,69 @@
+{
+    "tool": "wink-rtsp-stats",
+    "version": "1.1.0",
+    "schema_version": "1.1",
+    "target": "rtsp://potok:MCRrtk0534@10.0.60.120:554/snl/live/1/1",
+    "start_time": "2026-10-05T16:18:40.373+03:00",
+    "end_time": "2026-10-05T16:21:40.376+03:00",
+    "duration_s": 180.0028262,
+    "timing": {
+        "rtsp_connect_time_ms": 25,
+        "first_rtp_time_ms": 1107
+    },
+    "streams": [
+        {
+            "ssrc": "0xb87c6a23",
+            "media_type": "video",
+            "codec": "H264",
+            "payload_type": 96,
+            "clock_rate": 90000,
+            "packets_total": 103232,
+            "packets_lost_estimated": 0,
+            "packets_out_of_order": 0,
+            "packets_duplicated": 0,
+            "jitter_ms_avg": 1.0605102480354847,
+            "jitter_ms_max": 16.944739481189337,
+            "bitrate_kbps_avg": 6155.474774428848,
+            "bitrate_kbps_instant": 6155.474774428848,
+            "first_seq": 53945,
+            "last_seq": 26104,
+            "first_packet_ts": "2026-10-05T16:18:41.480+03:00",
+            "last_packet_ts": "2026-10-05T16:21:40.376+03:00",
+            "burst_avg_per_100ms": 69.89234935680433,
+            "burst_max_per_100ms": 395,
+            "burst_ratio": 5.651548468967655,
+            "burst_status": "BURSTY",
+            "clock_drift_ms": 64.65555555555555,
+            "clock_drift_trend_ms_per_min": 21.684932123681484,
+            "clock_drift_status": "OK",
+            "fingerprint": "H264 | PT=96 | SSRC=0xb87c6a23 | RTP/TCP"
+        }
+    ],
+    "summary": {
+        "streams_detected": 1,
+        "total_bitrate_kbps_avg": 6155.474774428848,
+        "total_packets": 103232,
+        "total_packets_lost_estimated": 0,
+        "ssrc_stable": true,
+        "ssrcs_initial": [
+            "0xb87c6a23"
+        ],
+        "transport_mode": "RTSP over TCP (interleaved)",
+        "rtcp_received": false
+    },
+    "_units": {
+        "duration_s": "seconds",
+        "bitrate_kbps": "kilobits per second",
+        "jitter_ms": "milliseconds",
+        "clock_rate": "Hz",
+        "rtsp_connect_time_ms": "milliseconds",
+        "first_rtp_time_ms": "milliseconds",
+        "interarrival_ms": "milliseconds",
+        "clock_drift_ms": "milliseconds per minute",
+        "burst_per_100ms": "packets per 100ms window"
+    },
+    "camera_id": "534",
+    "order_no": "25-254936",
+    "password": "1111111",
+    "operator": "ЦМИРиТ"
+}

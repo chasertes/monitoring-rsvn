@@ -1,0 +1,35 @@
+{
+    "sys_descr": "Linux localhost 5.10.168 #1 PREEMPT Wed Jul 30 09:01:27 UTC 2025 armv7l",
+    "sys_uptime": "716548049",
+    "sys_name": "localhost",
+    "ip_in_receives": "2011096382",
+    "ip_in_hdr_errors": "0",
+    "ip_in_addr_errors": "8",
+    "ip_out_requests": "687487015",
+    "icmp_in_msgs": "369121",
+    "icmp_out_echo_reps": "362437",
+    "mac_address_v6": "24a3f0b03e42",
+    "mac_address_v4": "24a3f0b03e42",
+    "interface_speed": "100000000",
+    "active_rtsp_sessions_count": 3,
+    "connected_clients": [
+        {
+            "client_ip": "172.16.140.13",
+            "client_port": 50098
+        },
+        {
+            "client_ip": "172.16.140.42",
+            "client_port": 50382
+        },
+        {
+            "client_ip": "172.16.140.42",
+            "client_port": 50876
+        }
+    ],
+    "tz_number": "535",
+    "order_number": "25-245678",
+    "rtsp_url": "rtsp://potok:MCRrtk0535@10.0.60.38:554/snl/live/1/1",
+    "operator": "ЦМИРиТ",
+    "ip": "10.0.60.38",
+    "scan_timestamp": "2026-10-05T16:18:33.571999"
+}
