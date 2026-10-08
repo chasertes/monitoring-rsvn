@@ -93,6 +93,7 @@ monitoring-rsvn/
 │   │   └── monitoring_service.py
 │   │
 │   ├── scanners/
+│   │   ├── __init__.py
 │   │   ├── snmp_scanner.py
 │   │   └── wink_scanner.py
 │   │
