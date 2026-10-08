@@ -10,7 +10,7 @@ The scanner does not:
 * read Excel files;
 * calculate application-level camera status;
 * contain FastAPI logic.
-  """
+"""
 
 import asyncio
 import json
@@ -21,192 +21,200 @@ from typing import Any
 from app.config import Settings, get_settings
 from app.logging_config import get_logger
 
+
 logger = get_logger("wink_scanner")
+
 
 @dataclass
 class WinkScanResult:
-"""Structured result returned by the WINK scanner."""
+    """Structured result returned by the WINK scanner."""
 
-
-target: str
-data: dict[str, Any] | None = None
-status: str = "success"
-error: str | None = None
-exit_code: int | None = None
+    target: str
+    data: dict[str, Any] | None = None
+    status: str = "success"
+    error: str | None = None
+    exit_code: int | None = None
 
 
 class WinkScanner:
-"""Execute WINK measurements with bounded concurrency."""
+    """Execute WINK measurements with bounded concurrency."""
 
+    def __init__(
+        self,
+        settings: Settings | None = None,
+    ) -> None:
+        """Initialize the scanner with application settings."""
 
-def __init__(
-    self,
-    settings: Settings | None = None,
-) -> None:
-    """Initialize the scanner with application settings."""
+        self.settings = settings or get_settings()
 
-    self.settings = settings or get_settings()
+        self._semaphore = asyncio.Semaphore(
+            self.settings.wink_concurrency,
+        )
 
-    self._semaphore = asyncio.Semaphore(
-        self.settings.wink_concurrency
-    )
+    async def scan(
+        self,
+        rtsp_url: str,
+    ) -> WinkScanResult:
+        """Run one WINK measurement."""
 
-async def scan(
-    self,
-    rtsp_url: str,
-) -> WinkScanResult:
-    """Run one WINK measurement."""
+        async with self._semaphore:
+            logger.info("WINK scan started")
 
-    async with self._semaphore:
-        logger.info("WINK scan started")
+            executable = Path(self.settings.wink_executable)
 
-        executable = Path(self.settings.wink_executable)
+            if not executable.exists():
+                error = (
+                    f"WINK executable not found: {executable}"
+                )
 
-        if not executable.exists():
-            error = (
-                f"WINK executable not found: {executable}"
-            )
+                logger.error(error)
 
-            logger.error(error)
+                return WinkScanResult(
+                    target=rtsp_url,
+                    status="executable_not_found",
+                    error=error,
+                )
 
-            return WinkScanResult(
-                target=rtsp_url,
-                status="executable_not_found",
-                error=error,
-            )
+            command = [
+                str(executable),
+                "monitor",
+                rtsp_url.strip(),
+                "--duration",
+                f"{self.settings.wink_measure_duration}s",
+                "--output",
+                "json",
+            ]
 
-        command = [
-            str(executable),
-            "monitor",
-            rtsp_url.strip(),
-            "--duration",
-            f"{self.settings.wink_measure_duration}s",
-            "--output",
-            "json",
-        ]
+            process: asyncio.subprocess.Process | None = None
 
-        process: asyncio.subprocess.Process | None = None
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=self.settings.wink_timeout,
+                )
 
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=self.settings.wink_timeout,
-            )
+            except asyncio.TimeoutError:
+                if process is not None:
+                    process.kill()
+                    await process.wait()
 
-        except asyncio.TimeoutError:
-            if process is not None:
-                process.kill()
-                await process.wait()
+                logger.error("WINK scan timeout")
 
-            logger.error("WINK scan timeout")
+                return WinkScanResult(
+                    target=rtsp_url,
+                    status="timeout",
+                    error="WINK process timed out",
+                )
 
-            return WinkScanResult(
-                target=rtsp_url,
-                status="timeout",
-                error="WINK process timed out",
-            )
+            except OSError as exc:
+                logger.exception(
+                    "WINK process failed to start",
+                )
 
-        except OSError as exc:
-            logger.exception("WINK process failed to start")
+                return WinkScanResult(
+                    target=rtsp_url,
+                    status="process_error",
+                    error=str(exc),
+                )
 
-            return WinkScanResult(
-                target=rtsp_url,
-                status="process_error",
-                error=str(exc),
-            )
+            except Exception as exc:
+                logger.exception(
+                    "Unexpected WINK scanner error",
+                )
 
-        except Exception as exc:
-            logger.exception("Unexpected WINK scanner error")
+                return WinkScanResult(
+                    target=rtsp_url,
+                    status="scanner_error",
+                    error=str(exc),
+                )
 
-            return WinkScanResult(
-                target=rtsp_url,
-                status="scanner_error",
-                error=str(exc),
-            )
+            exit_code = process.returncode
 
-        exit_code = process.returncode
-        stdout_text = stdout.decode(
-            "utf-8",
-            errors="replace",
-        ).strip()
-        stderr_text = stderr.decode(
-            "utf-8",
-            errors="replace",
-        ).strip()
+            stdout_text = stdout.decode(
+                "utf-8",
+                errors="replace",
+            ).strip()
 
-        if not stdout_text:
-            error = stderr_text or "WINK returned empty output"
+            stderr_text = stderr.decode(
+                "utf-8",
+                errors="replace",
+            ).strip()
 
-            logger.error(
-                "WINK scan failed with exit code %s",
-                exit_code,
-            )
+            if not stdout_text:
+                error = stderr_text or "WINK returned empty output"
 
-            return WinkScanResult(
-                target=rtsp_url,
-                status="failed",
-                error=error,
-                exit_code=exit_code,
-            )
+                logger.error(
+                    "WINK scan failed with exit code %s",
+                    exit_code,
+                )
 
-        try:
-            metrics_data = json.loads(stdout_text)
+                return WinkScanResult(
+                    target=rtsp_url,
+                    status="failed",
+                    error=error,
+                    exit_code=exit_code,
+                )
 
-        except json.JSONDecodeError as exc:
-            logger.error("WINK returned invalid JSON")
+            try:
+                metrics_data = json.loads(stdout_text)
 
-            return WinkScanResult(
-                target=rtsp_url,
-                status="bad_json",
-                error=str(exc),
-                exit_code=exit_code,
-            )
+            except json.JSONDecodeError as exc:
+                logger.error("WINK returned invalid JSON")
 
-        if not isinstance(metrics_data, dict):
-            logger.error("WINK returned unexpected JSON type")
+                return WinkScanResult(
+                    target=rtsp_url,
+                    status="bad_json",
+                    error=str(exc),
+                    exit_code=exit_code,
+                )
 
-            return WinkScanResult(
-                target=rtsp_url,
-                status="invalid_result",
-                error="WINK JSON root must be an object",
-                exit_code=exit_code,
-            )
+            if not isinstance(metrics_data, dict):
+                logger.error(
+                    "WINK returned unexpected JSON type",
+                )
 
-        if exit_code not in (0, None):
-            logger.error(
-                "WINK process exited with code %s",
-                exit_code,
-            )
+                return WinkScanResult(
+                    target=rtsp_url,
+                    status="invalid_result",
+                    error="WINK JSON root must be an object",
+                    exit_code=exit_code,
+                )
+
+            if exit_code not in (0, None):
+                logger.error(
+                    "WINK process exited with code %s",
+                    exit_code,
+                )
+
+                return WinkScanResult(
+                    target=rtsp_url,
+                    data=metrics_data,
+                    status="process_failed",
+                    error=stderr_text or "WINK process failed",
+                    exit_code=exit_code,
+                )
+
+            logger.info("WINK scan completed")
 
             return WinkScanResult(
                 target=rtsp_url,
                 data=metrics_data,
-                status="process_failed",
-                error=stderr_text or "WINK process failed",
+                status="success",
                 exit_code=exit_code,
             )
 
-        logger.info("WINK scan completed")
+    async def scan_many(
+        self,
+        rtsp_urls: list[str],
+    ) -> list[WinkScanResult]:
+        """Run WINK measurements concurrently."""
 
-        return WinkScanResult(
-            target=rtsp_url,
-            data=metrics_data,
-            status="success",
-            exit_code=exit_code,
+        return await asyncio.gather(
+            *(self.scan(rtsp_url) for rtsp_url in rtsp_urls),
         )
-
-async def scan_many(
-    self,
-    rtsp_urls: list[str],
-) -> list[WinkScanResult]:
-    """Run WINK measurements concurrently."""
-
-    return await asyncio.gather(
-        *(self.scan(rtsp_url) for rtsp_url in rtsp_urls),
-    )
