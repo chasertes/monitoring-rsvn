@@ -133,10 +133,10 @@ class Settings(BaseSettings):
     # Unlike SNMP, WINK invokes a blocking external executable, so a
     # bounded process pool/concurrency limit is appropriate here.
     wink_concurrency: int = Field(default=4, ge=1)
-
     # Maximum time allowed for one WINK measurement.
     wink_timeout: float = Field(default=300.0, gt=0)
-
+    # Duration of one WINK measurement in seconds.
+    wink_measure_duration: int = Field(default=180, ge=1)
     # ------------------------------------------------------------------
     # Monitoring worker
     # ------------------------------------------------------------------

@@ -27,7 +27,7 @@ DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 def _resolve_log_level(level: str) -> int:
 """Convert a textual log level to a logging constant."""
 
-```
+
 normalized_level = level.upper().strip()
 
 log_level = getattr(logging, normalized_level, None)
@@ -36,12 +36,12 @@ if not isinstance(log_level, int):
     return logging.INFO
 
 return log_level
-```
+
 
 def configure_logging() -> None:
 """Configure console and file logging for the application.
 
-```
+
 Logging is configured centrally and can safely be called by both
 the Web and Worker entry points.
 """
@@ -84,12 +84,12 @@ if logging.StreamHandler not in existing_handler_types:
 
 if logging.handlers.RotatingFileHandler not in existing_handler_types:
     logger.addHandler(file_handler)
-```
+
 
 def get_logger(name: str | None = None) -> logging.Logger:
 """Return an application logger.
 
-```
+
 If no name is provided, the root application logger is returned.
 """
 

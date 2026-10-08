@@ -59,26 +59,26 @@ SCALAR_METRICS["mac_address_v4"],
 class RtspClient:
 """A client connected to the camera's RTSP port."""
 
-```
+
 client_ip: str
 client_port: int
-```
+
 
 @dataclass
 class SnmpScanResult:
 """Structured result returned by the SNMP scanner."""
 
-```
+
 ip: str
 metrics: dict[str, str] = field(default_factory=dict)
 active_rtsp_sessions_count: int = 0
 connected_clients: list[RtspClient] = field(default_factory=list)
-```
+
 
 class SnmpScanner:
 """Asynchronous SNMP scanner with bounded concurrency."""
 
-```
+
 def __init__(
     self,
     settings: Settings | None = None,

@@ -27,18 +27,18 @@ logger = get_logger("wink_scanner")
 class WinkScanResult:
 """Structured result returned by the WINK scanner."""
 
-```
+
 target: str
 data: dict[str, Any] | None = None
 status: str = "success"
 error: str | None = None
 exit_code: int | None = None
-```
+
 
 class WinkScanner:
 """Execute WINK measurements with bounded concurrency."""
 
-```
+
 def __init__(
     self,
     settings: Settings | None = None,
@@ -80,7 +80,7 @@ async def scan(
             "monitor",
             rtsp_url.strip(),
             "--duration",
-            "180s",
+            f"{self.settings.wink_measure_duration}s",
             "--output",
             "json",
         ]
