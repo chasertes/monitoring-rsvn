@@ -4,7 +4,7 @@ Camera credentials ORM model.
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Text, String, ForeignKey, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
