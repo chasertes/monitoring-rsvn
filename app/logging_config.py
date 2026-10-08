@@ -39,12 +39,8 @@ return log_level
 
 
 def configure_logging() -> None:
-"""Configure console and file logging for the application.
+"""Configure console and file logging for the application."""
 
-
-Logging is configured centrally and can safely be called by both
-the Web and Worker entry points.
-"""
 
 settings = get_settings()
 log_level = _resolve_log_level(settings.log_level)
@@ -87,13 +83,11 @@ if logging.handlers.RotatingFileHandler not in existing_handler_types:
 
 
 def get_logger(name: str | None = None) -> logging.Logger:
-"""Return an application logger.
+"""Return an application logger."""
 
-
-If no name is provided, the root application logger is returned.
-"""
 
 if name:
     return logging.getLogger(f"{LOGGER_NAME}.{name}")
 
 return logging.getLogger(LOGGER_NAME)
+

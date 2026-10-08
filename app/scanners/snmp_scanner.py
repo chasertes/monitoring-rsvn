@@ -72,7 +72,9 @@ class SnmpScanResult:
 ip: str
 metrics: dict[str, str] = field(default_factory=dict)
 active_rtsp_sessions_count: int = 0
-connected_clients: list[RtspClient] = field(default_factory=list)
+connected_clients: list[RtspClient] = field(
+    default_factory=list,
+)
 
 
 class SnmpScanner:
@@ -87,10 +89,13 @@ def __init__(
 
     self.settings = settings or get_settings()
     self._semaphore = asyncio.Semaphore(
-        self.settings.snmp_concurrency
+        self.settings.snmp_concurrency,
     )
 
-async def scan(self, ip: str) -> SnmpScanResult | None:
+async def scan(
+    self,
+    ip: str,
+) -> SnmpScanResult | None:
     """Scan one camera by IP address.
 
     Returns None when the camera cannot be queried successfully.
@@ -102,7 +107,10 @@ async def scan(self, ip: str) -> SnmpScanResult | None:
         engine = SnmpEngine()
 
         try:
-            metrics = await self._fetch_scalars(ip, engine)
+            metrics = await self._fetch_scalars(
+                ip,
+                engine,
+            )
 
             if not metrics:
                 logger.warning(
@@ -125,12 +133,18 @@ async def scan(self, ip: str) -> SnmpScanResult | None:
                 connected_clients=rtsp_data["connected_clients"],
             )
 
-            logger.info("SNMP scan completed: %s", ip)
+            logger.info(
+                "SNMP scan completed: %s",
+                ip,
+            )
 
             return result
 
         except Exception:
-            logger.exception("SNMP scan failed: %s", ip)
+            logger.exception(
+                "SNMP scan failed: %s",
+                ip,
+            )
             return None
 
         finally:
@@ -176,7 +190,12 @@ async def _fetch_scalars(
             retries=self.settings.snmp_retries,
         )
 
-        error_indication, error_status, _, var_binds = await get_cmd(
+        (
+            error_indication,
+            error_status,
+            _,
+            var_binds,
+        ) = await get_cmd(
             engine,
             community_data,
             transport,
@@ -187,7 +206,11 @@ async def _fetch_scalars(
             ],
         )
 
-        if error_indication or error_status or not var_binds:
+        if (
+            error_indication
+            or error_status
+            or not var_binds
+        ):
             return None
 
         results: dict[str, str] = {}
@@ -203,7 +226,9 @@ async def _fetch_scalars(
             )
 
             for name, target_oid in SCALAR_METRICS.items():
-                if oid_str.endswith(target_oid.lstrip(".")):
+                if oid_str.endswith(
+                    target_oid.lstrip("."),
+                ):
                     results[name] = value_str
                     break
 
@@ -224,7 +249,8 @@ def _format_value(
     """Convert a PySNMP value into a stable string representation."""
 
     if isinstance(value, OctetString) and any(
-        mac_oid in oid for mac_oid in MAC_OIDS
+        mac_oid in oid
+        for mac_oid in MAC_OIDS
     ):
         return value.asOctets().hex()
 
@@ -252,7 +278,7 @@ async def _scan_rtsp_connections(
         )
 
         current_oid = ObjectType(
-            ObjectIdentity("1.3.6.1.2.1.6")
+            ObjectIdentity("1.3.6.1.2.1.6"),
         )
 
         is_walking = True
@@ -304,7 +330,7 @@ async def _scan_rtsp_connections(
                     break
 
                 current_oid = ObjectType(
-                    ObjectIdentity(oid_tuples)
+                    ObjectIdentity(oid_tuples),
                 )
 
                 if (
@@ -313,11 +339,13 @@ async def _scan_rtsp_connections(
                 ):
                     continue
 
-                client = self._extract_rtsp_client(oid_tuples)
+                client = self._extract_rtsp_client(
+                    oid_tuples,
+                )
 
                 if client is not None:
                     if not self._is_filtered_client(
-                        client.client_ip
+                        client.client_ip,
                     ):
                         if client not in rtsp_clients:
                             rtsp_clients.append(client)
@@ -377,7 +405,10 @@ def _extract_rtsp_client(
 
     return None
 
-def _is_filtered_client(self, client_ip: str) -> bool:
+def _is_filtered_client(
+    self,
+    client_ip: str,
+) -> bool:
     """Return True when a client belongs to an excluded network."""
 
     if self.settings.except_our_networks != 0:
@@ -388,7 +419,10 @@ def _is_filtered_client(self, client_ip: str) -> bool:
 
         for network in self.settings.our_networks_list:
             if "/" not in network:
-                if client_address == ipaddress.ip_address(network):
+                if (
+                    client_address
+                    == ipaddress.ip_address(network)
+                ):
                     return True
 
                 continue
