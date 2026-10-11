@@ -302,11 +302,16 @@ class SnmpScanner:
                     lexicographicMode=True,
                 )
 
-                if (
-                    error_indication
-                    or error_status
-                    or not var_binds_table
-                ):
+                if error_indication or error_status:
+                    logger.warning(
+                        "SNMP TCP table walk failed for %s: %s",
+                        ip,
+                        error_indication or error_status,
+                    )
+                    break
+
+                if not var_binds_table:
+                    walk_succeeded = True
                     break
 
                 for var_bind in var_binds_table:
