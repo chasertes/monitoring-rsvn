@@ -133,7 +133,6 @@ class SnmpScanner:
                     return None
 
                 result = SnmpScanResult(
-
                     ip=ip,
                     metrics=metrics,
                     active_rtsp_sessions_count=(
@@ -274,7 +273,6 @@ class SnmpScanner:
 
         rtsp_clients: list[RtspClient] = []
         walk_succeeded = False
-        
         try:
             community_data = CommunityData(
                 self.settings.snmp_community,
