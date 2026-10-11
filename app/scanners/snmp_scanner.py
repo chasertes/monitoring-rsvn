@@ -265,7 +265,8 @@ class SnmpScanner:
         """Walk the TCP table and find established RTSP connections."""
 
         rtsp_clients: list[RtspClient] = []
-
+        walk_succeeded = False
+        
         try:
             community_data = CommunityData(
                 self.settings.snmp_community,
