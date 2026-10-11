@@ -7,10 +7,10 @@ from datetime import datetime
 from sqlalchemy import (
     BigInteger,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
-    ForeignKey,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
