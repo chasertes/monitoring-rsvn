@@ -120,12 +120,21 @@ class SnmpScanner:
                     )
                     return None
 
+
                 rtsp_data = await self._scan_rtsp_connections(
                     ip,
                     engine,
                 )
 
+                if rtsp_data is None:
+                    logger.warning(
+                        "SNMP RTSP connection scan failed: %s",
+                        ip,
+                    )
+                    return None
+
                 result = SnmpScanResult(
+
                     ip=ip,
                     metrics=metrics,
                     active_rtsp_sessions_count=(
