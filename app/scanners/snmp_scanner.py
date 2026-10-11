@@ -326,10 +326,7 @@ class SnmpScanner:
                         ObjectIdentity(oid_tuples),
                     )
 
-                    if (
-                        "5" not in state_value
-                        and "established" not in state_value
-                    ):
+                    if state_value not in {"5", "established"}:
                         continue
 
                     client = self._extract_rtsp_client(
