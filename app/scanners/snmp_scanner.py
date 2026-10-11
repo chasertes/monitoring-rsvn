@@ -261,7 +261,7 @@ class SnmpScanner:
         self,
         ip: str,
         engine: SnmpEngine,
-    ) -> dict[str, object]:
+    ) -> dict[str, object] | None:
         """Walk the TCP table and find established RTSP connections."""
 
         rtsp_clients: list[RtspClient] = []
