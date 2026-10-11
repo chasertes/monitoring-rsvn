@@ -120,7 +120,6 @@ class SnmpScanner:
                     )
                     return None
 
-
                 rtsp_data = await self._scan_rtsp_connections(
                     ip,
                     engine,
