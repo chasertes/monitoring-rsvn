@@ -290,6 +290,7 @@ class SnmpScanner:
             )
 
             is_walking = True
+            last_oid: tuple[int, ...] | None = None
 
             while is_walking:
                 (
@@ -329,6 +330,17 @@ class SnmpScanner:
 
                     oid_tuples = tuple(oid_obj)
                     state_value = str(value_obj).lower()
+
+                    if last_oid is not None and oid_tuples <= last_oid:
+                        logger.warning(
+                            "SNMP TCP table walk returned "
+                            "a non-increasing OID for %s: %s",
+                            ip,
+                            oid_tuples,
+                        )
+                        return None
+
+                    last_oid = oid_tuples
 
                     if oid_tuples[:7] != TCP_BASE_OID:
                         walk_succeeded = True
