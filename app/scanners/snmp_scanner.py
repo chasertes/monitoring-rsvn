@@ -353,6 +353,13 @@ class SnmpScanner:
                 ip,
             )
 
+        if not walk_succeeded:
+            logger.warning(
+                "SNMP TCP table walk did not complete successfully: %s",
+                ip,
+            )
+            return None
+
         return {
             "active_rtsp_sessions_count": len(rtsp_clients),
             "connected_clients": rtsp_clients,
