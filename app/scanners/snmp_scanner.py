@@ -308,15 +308,7 @@ class SnmpScanner:
                 ):
                     break
 
-                flat_var_binds = []
-
-                for item in var_binds_table:
-                    if isinstance(item, (list, tuple)):
-                        flat_var_binds.extend(item)
-                    else:
-                        flat_var_binds.append(item)
-
-                for var_bind in flat_var_binds:
+                for var_bind in var_binds_table:
                     try:
                         oid_obj = var_bind[0]
                         value_obj = var_bind[1]
