@@ -1,9 +1,8 @@
 """Asynchronous SNMP scanner.
 
-This module contains only SNMP protocol communication.
+This module handles SNMP communication only.
 
 The scanner does not:
-
 * access PostgreSQL;
 * read Excel files;
 * write JSON files;
@@ -24,8 +23,10 @@ from pysnmp.hlapi.v3arch.asyncio import (
     UdpTransportTarget,
     bulk_cmd,
     get_cmd,
+    is_end_of_mib,
 )
 from pysnmp.proto.rfc1902 import OctetString
+from pysnmp.proto.rfc1905 import NoSuchInstance, NoSuchObject
 from pysnmp.smi.rfc1902 import ObjectIdentity, ObjectType
 
 from app.config import Settings, get_settings
@@ -52,10 +53,20 @@ SCALAR_METRICS = {
 
 TCP_BASE_OID = (1, 3, 6, 1, 2, 1, 6)
 
+# tcpConnState: deprecated IPv4 TCP table.
+TCP_CONN_STATE_PREFIX = TCP_BASE_OID + (13, 1, 1)
+
+# tcpConnectionState: modern IP-version-neutral TCP table.
+TCP_CONNECTION_STATE_PREFIX = TCP_BASE_OID + (19, 1, 7)
+
 MAC_OIDS = {
     SCALAR_METRICS["mac_address_v6"],
     SCALAR_METRICS["mac_address_v4"],
 }
+
+RTSP_PORT = 554
+TCP_WALK_MAX_REPETITIONS = 50
+TCP_WALK_MAX_REQUESTS = 1000
 
 
 @dataclass(frozen=True)
@@ -64,6 +75,21 @@ class RtspClient:
 
     client_ip: str
     client_port: int
+
+
+@dataclass
+class RtspScanResult:
+    """Result of scanning the TCP table for RTSP clients."""
+
+    connected_clients: list[RtspClient] = field(
+        default_factory=list,
+    )
+
+    @property
+    def active_rtsp_sessions_count(self) -> int:
+        """Return the number of distinct discovered RTSP clients."""
+
+        return len(self.connected_clients)
 
 
 @dataclass
@@ -88,7 +114,6 @@ class SnmpScanner:
         """Initialize the scanner with application settings."""
 
         self.settings = settings or get_settings()
-
         self._semaphore = asyncio.Semaphore(
             self.settings.snmp_concurrency,
         )
@@ -97,14 +122,13 @@ class SnmpScanner:
         self,
         ip: str,
     ) -> SnmpScanResult | None:
-        """Scan one camera by IP address.
+        """Scan one camera.
 
-        Returns None when the camera cannot be queried successfully.
+        Return None when the scalar query or TCP table walk fails.
         """
 
         async with self._semaphore:
             logger.info("SNMP scan started: %s", ip)
-
             engine = SnmpEngine()
 
             try:
@@ -120,12 +144,12 @@ class SnmpScanner:
                     )
                     return None
 
-                rtsp_data = await self._scan_rtsp_connections(
+                rtsp_result = await self._scan_rtsp_connections(
                     ip,
                     engine,
                 )
 
-                if rtsp_data is None:
+                if rtsp_result is None:
                     logger.warning(
                         "SNMP RTSP connection scan failed: %s",
                         ip,
@@ -136,23 +160,16 @@ class SnmpScanner:
                     ip=ip,
                     metrics=metrics,
                     active_rtsp_sessions_count=(
-                        rtsp_data["active_rtsp_sessions_count"]
+                        rtsp_result.active_rtsp_sessions_count
                     ),
-                    connected_clients=rtsp_data["connected_clients"],
+                    connected_clients=rtsp_result.connected_clients,
                 )
 
-                logger.info(
-                    "SNMP scan completed: %s",
-                    ip,
-                )
-
+                logger.info("SNMP scan completed: %s", ip)
                 return result
 
             except Exception:
-                logger.exception(
-                    "SNMP scan failed: %s",
-                    ip,
-                )
+                logger.exception("SNMP scan failed: %s", ip)
                 return None
 
             finally:
@@ -164,8 +181,7 @@ class SnmpScanner:
     ) -> list[SnmpScanResult]:
         """Scan multiple cameras concurrently.
 
-        Individual camera failures are isolated and do not stop the
-        complete scan.
+        A failed camera does not prevent other scans from completing.
         """
 
         results = await asyncio.gather(
@@ -214,31 +230,66 @@ class SnmpScanner:
                 ],
             )
 
-            if (
-                error_indication
-                or error_status
-                or not var_binds
-            ):
+            if error_indication or error_status or not var_binds:
+                logger.warning(
+                    "SNMP scalar request returned an error for %s: %s",
+                    ip,
+                    error_indication or error_status or "empty response",
+                )
                 return None
 
+            # Map only exact OID matches. Do not accept an unrelated OID
+            # just because its text happens to end with a requested OID.
+            oid_to_name = {
+                oid: name
+                for name, oid in SCALAR_METRICS.items()
+            }
             results: dict[str, str] = {}
 
             for var_bind in var_binds:
-                oid_obj = var_bind[0]
-                value_obj = var_bind[1]
-                oid_str = str(oid_obj)
+                try:
+                    oid_obj = var_bind[0]
+                    value_obj = var_bind[1]
+                except (IndexError, TypeError):
+                    logger.warning(
+                        "Malformed SNMP scalar response from %s",
+                        ip,
+                    )
+                    continue
 
-                value_str = self._format_value(
+                if isinstance(
+                    value_obj,
+                    (NoSuchObject, NoSuchInstance),
+                ):
+                    logger.debug(
+                        "SNMP metric is unavailable on %s: %s",
+                        ip,
+                        oid_obj,
+                    )
+                    continue
+
+                oid_str = str(oid_obj)
+                metric_name = oid_to_name.get(oid_str)
+
+                if metric_name is None:
+                    logger.debug(
+                        "Unexpected OID in scalar response from %s: %s",
+                        ip,
+                        oid_str,
+                    )
+                    continue
+
+                results[metric_name] = self._format_value(
                     oid_str,
                     value_obj,
                 )
 
-                for name, target_oid in SCALAR_METRICS.items():
-                    if oid_str.endswith(
-                        target_oid.lstrip("."),
-                    ):
-                        results[name] = value_str
-                        break
+            if not results:
+                logger.warning(
+                    "SNMP scalar response contained no usable metrics: %s",
+                    ip,
+                )
+                return None
 
             return results
 
@@ -256,10 +307,7 @@ class SnmpScanner:
     ) -> str:
         """Convert a PySNMP value into a stable string representation."""
 
-        if isinstance(value, OctetString) and any(
-            mac_oid in oid
-            for mac_oid in MAC_OIDS
-        ):
+        if oid in MAC_OIDS and isinstance(value, OctetString):
             return value.asOctets().hex()
 
         return str(value)
@@ -268,11 +316,20 @@ class SnmpScanner:
         self,
         ip: str,
         engine: SnmpEngine,
-    ) -> dict[str, object] | None:
-        """Walk the TCP table and find established RTSP connections."""
+    ) -> RtspScanResult | None:
+        """Walk the TCP subtree and find established RTSP connections.
+
+        Return None if the walk fails or does not make forward progress.
+        An empty RtspScanResult means the walk succeeded but no matching
+        RTSP connections were found.
+        """
 
         rtsp_clients: list[RtspClient] = []
-        walk_succeeded = False
+        last_oid: tuple[int, ...] | None = None
+        current_oid = ObjectType(
+            ObjectIdentity(TCP_BASE_OID),
+        )
+
         try:
             community_data = CommunityData(
                 self.settings.snmp_community,
@@ -285,26 +342,19 @@ class SnmpScanner:
                 retries=self.settings.snmp_retries,
             )
 
-            current_oid = ObjectType(
-                ObjectIdentity("1.3.6.1.2.1.6"),
-            )
-
-            is_walking = True
-            last_oid: tuple[int, ...] | None = None
-
-            while is_walking:
+            for _ in range(TCP_WALK_MAX_REQUESTS):
                 (
                     error_indication,
                     error_status,
                     _,
-                    var_binds_table,
+                    var_binds,
                 ) = await bulk_cmd(
                     engine,
                     community_data,
                     transport,
                     ContextData(),
                     0,
-                    50,
+                    TCP_WALK_MAX_REPETITIONS,
                     current_oid,
                     lexicographicMode=True,
                 )
@@ -315,26 +365,44 @@ class SnmpScanner:
                         ip,
                         error_indication or error_status,
                     )
-                    break
+                    return None
 
-                if not var_binds_table:
-                    walk_succeeded = True
-                    break
+                if not var_binds:
+                    # A successful empty response ends the walk.
+                    return RtspScanResult(
+                        connected_clients=rtsp_clients,
+                    )
 
-                for var_bind in var_binds_table:
+                reached_end_of_mib = False
+                reached_end_of_subtree = False
+
+                for var_bind in var_binds:
                     try:
                         oid_obj = var_bind[0]
                         value_obj = var_bind[1]
                     except (IndexError, TypeError):
-                        continue
+                        logger.warning(
+                            "Malformed SNMP TCP table response from %s",
+                            ip,
+                        )
+                        return None
+
+                    # endOfMibView is a protocol marker, not a real table
+                    # entry. Check it before comparing OID progress.
+                    if is_end_of_mib((var_bind,)):
+                        reached_end_of_mib = True
+                        break
 
                     oid_tuples = tuple(oid_obj)
-                    state_value = str(value_obj).lower()
 
-                    if last_oid is not None and oid_tuples <= last_oid:
+                    # GETBULK results must advance in lexicographic order.
+                    if (
+                        last_oid is not None
+                        and oid_tuples <= last_oid
+                    ):
                         logger.warning(
-                            "SNMP TCP table walk returned "
-                            "a non-increasing OID for %s: %s",
+                            "SNMP TCP walk returned a non-increasing "
+                            "OID for %s: %s",
                             ip,
                             oid_tuples,
                         )
@@ -342,90 +410,199 @@ class SnmpScanner:
 
                     last_oid = oid_tuples
 
-                    if oid_tuples[:7] != TCP_BASE_OID:
-                        walk_succeeded = True
-                        is_walking = False
+                    # The first OID outside the requested TCP subtree marks
+                    # normal completion of this lexicographic walk.
+                    if oid_tuples[:len(TCP_BASE_OID)] != TCP_BASE_OID:
+                        reached_end_of_subtree = True
                         break
 
                     current_oid = ObjectType(
                         ObjectIdentity(oid_tuples),
                     )
 
-                    if state_value not in {"5", "established"}:
+                    state_value = str(value_obj).strip().lower()
+                    if state_value not in {
+                        "5",
+                        "established",
+                        "established(5)",
+                    }:
                         continue
 
-                    client = self._extract_rtsp_client(
-                        oid_tuples,
+                    client = self._extract_rtsp_client(oid_tuples)
+                    if client is None:
+                        continue
+
+                    if self._is_filtered_client(client.client_ip):
+                        continue
+
+                    if client not in rtsp_clients:
+                        rtsp_clients.append(client)
+
+                if reached_end_of_mib or reached_end_of_subtree:
+                    return RtspScanResult(
+                        connected_clients=rtsp_clients,
                     )
 
-                    if client is not None:
-                        if not self._is_filtered_client(
-                            client.client_ip,
-                        ):
-                            if client not in rtsp_clients:
-                                rtsp_clients.append(client)
+            logger.warning(
+                "SNMP TCP table walk exceeded the request limit for %s",
+                ip,
+            )
+            return None
 
         except Exception:
             logger.exception(
                 "RTSP TCP table scan failed: %s",
                 ip,
             )
-
-        if not walk_succeeded:
-            logger.warning(
-                "SNMP TCP table walk did not complete successfully: %s",
-                ip,
-            )
             return None
-
-        return {
-            "active_rtsp_sessions_count": len(rtsp_clients),
-            "connected_clients": rtsp_clients,
-        }
 
     @staticmethod
     def _extract_rtsp_client(
         oid_tuples: tuple[int, ...],
     ) -> RtspClient | None:
-        """Extract an RTSP client from supported TCP table formats."""
+        """Extract a client from a TCP state-column OID.
 
-        # Classic tcpConnTable (.13).
-        if len(oid_tuples) == 20 and oid_tuples[7] == 13:
-            local_port = oid_tuples[14]
+        Supports the classic IPv4 tcpConnTable and the modern
+        tcpConnectionTable, including IPv4, IPv6, IPv4z and IPv6z
+        address indexes in the modern table.
+        """
 
-            if local_port != 554:
+        # Classic tcpConnState:
+        # .1.3.6.1.2.1.6.13.1.1.<local IPv4>.<local port>
+        #     .<remote IPv4>.<remote port>
+        if oid_tuples[:10] == TCP_CONN_STATE_PREFIX:
+            if len(oid_tuples) != 20:
                 return None
 
-            remote_ip = ".".join(
-                str(part)
-                for part in oid_tuples[15:19]
-            )
+            local_port = oid_tuples[14]
+            remote_address = oid_tuples[15:19]
             remote_port = oid_tuples[19]
 
-            return RtspClient(
-                client_ip=remote_ip,
-                client_port=int(remote_port),
-            )
-
-        # Modern tcpConnectionTable (.19).
-        if len(oid_tuples) == 24 and oid_tuples[7] == 19:
-            local_port = oid_tuples[16]
-
-            if local_port != 554:
+            if local_port != RTSP_PORT:
                 return None
 
-            remote_ip = ".".join(
-                str(part)
-                for part in oid_tuples[19:23]
-            )
-            remote_port = oid_tuples[23]
+            if not 0 <= remote_port <= 65535:
+                return None
+
+            try:
+                client_ip = str(
+                    ipaddress.IPv4Address(bytes(remote_address)),
+                )
+            except (ValueError, ipaddress.AddressValueError):
+                return None
 
             return RtspClient(
-                client_ip=remote_ip,
-                client_port=int(remote_port),
+                client_ip=client_ip,
+                client_port=remote_port,
             )
 
-        return None
+        # Modern tcpConnectionState:
+        # .1.3.6.1.2.1.6.19.1.7.<index>
+        #
+        # The variable-length InetAddress index includes a length
+        # subidentifier. This means fixed offsets are not safe for IPv6.
+        if oid_tuples[:10] != TCP_CONNECTION_STATE_PREFIX:
+            return None
+
+        cursor = 10
+
+        try:
+            # Local address type and variable-length local address.
+            _local_address_type = oid_tuples[cursor]
+            cursor += 1
+
+            local_address_length = oid_tuples[cursor]
+            cursor += 1
+
+            if local_address_length < 1:
+                return None
+
+            cursor += local_address_length
+
+            # Local port.
+            local_port = oid_tuples[cursor]
+            cursor += 1
+
+            # Remote address type and variable-length remote address.
+            remote_address_type = oid_tuples[cursor]
+            cursor += 1
+
+            remote_address_length = oid_tuples[cursor]
+            cursor += 1
+
+            if remote_address_length < 1:
+                return None
+
+            remote_address = oid_tuples[
+                cursor:cursor + remote_address_length
+            ]
+            cursor += remote_address_length
+
+            # Remote port must be the final index component.
+            remote_port = oid_tuples[cursor]
+            cursor += 1
+
+        except IndexError:
+            return None
+
+        if cursor != len(oid_tuples):
+            return None
+
+        if local_port != RTSP_PORT:
+            return None
+
+        if not 0 <= remote_port <= 65535:
+            return None
+
+        try:
+            if remote_address_type == 1 and remote_address_length == 4:
+                client_ip = str(
+                    ipaddress.IPv4Address(bytes(remote_address)),
+                )
+
+            elif (
+                remote_address_type == 2
+                and remote_address_length == 16
+            ):
+                client_ip = str(
+                    ipaddress.IPv6Address(bytes(remote_address)),
+                )
+
+            elif (
+                remote_address_type == 3
+                and remote_address_length == 8
+            ):
+                # IPv4z consists of a 4-byte IPv4 address followed by
+                # a 4-byte zone index. The zone is not part of the IP.
+                client_ip = str(
+                    ipaddress.IPv4Address(
+                        bytes(remote_address[:4]),
+                    ),
+                )
+
+            elif (
+                remote_address_type == 4
+                and remote_address_length == 20
+            ):
+                # IPv6z consists of a 16-byte IPv6 address followed by
+                # a 4-byte zone index.
+                client_ip = str(
+                    ipaddress.IPv6Address(
+                        bytes(remote_address[:16]),
+                    ),
+                )
+
+            else:
+                # Unsupported address type or malformed index.
+                return None
+
+        except ValueError:
+            return None
+
+        return RtspClient(
+            client_ip=client_ip,
+            client_port=remote_port,
+        )
 
     def _is_filtered_client(
         self,
@@ -433,20 +610,25 @@ class SnmpScanner:
     ) -> bool:
         """Return True when a client belongs to an excluded network."""
 
+        # Preserve the existing configuration semantics.
         if self.settings.except_our_networks != 0:
             return False
 
         try:
             client_address = ipaddress.ip_address(client_ip)
+        except ValueError:
+            logger.warning(
+                "Invalid client IP encountered: %s",
+                client_ip,
+            )
+            return False
 
-            for network in self.settings.our_networks_list:
+        for network in self.settings.our_networks_list:
+            try:
                 if "/" not in network:
-                    if (
-                        client_address
-                        == ipaddress.ip_address(network)
-                    ):
+                    network_address = ipaddress.ip_address(network)
+                    if client_address == network_address:
                         return True
-
                     continue
 
                 network_object = ipaddress.ip_network(
@@ -457,10 +639,12 @@ class SnmpScanner:
                 if client_address in network_object:
                     return True
 
-        except ValueError:
-            logger.warning(
-                "Invalid client IP encountered: %s",
-                client_ip,
-            )
+            except ValueError:
+                # One invalid network entry should not prevent checking
+                # the remaining configured networks.
+                logger.warning(
+                    "Invalid network in SNMP client filter: %s",
+                    network,
+                )
 
         return False
