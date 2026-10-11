@@ -325,6 +325,7 @@ class SnmpScanner:
                     state_value = str(value_obj).lower()
 
                     if oid_tuples[:7] != TCP_BASE_OID:
+                        walk_succeeded = True
                         is_walking = False
                         break
 
